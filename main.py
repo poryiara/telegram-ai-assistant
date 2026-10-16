@@ -6,6 +6,9 @@ import requests
 import subprocess
 import tempfile
 import re
+import datetime
+import pytz
+import jdatetime
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from google import genai
@@ -23,6 +26,7 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
+DEFAULT_CITY = os.environ.get("DEFAULT_CITY", "Tehran")
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
@@ -179,41 +183,48 @@ they are NOT asking you to deliver a message to Poryia. Do NOT say things like
 and continue the conversation normally."""
 
 SMART_TOOL_RULES = """
-=== SMART DECISION: WHEN TO SEARCH vs WHEN NOT TO ===
+=== SMART TOOL SELECTION (VERY IMPORTANT) ===
 
-🔴 MUST SEARCH (use web_search tool):
-- Current time ("ساعت چنده؟") → search: "current time in Tehran Iran"
-- Today's date ("امروز چندمه؟") → search: "today's date in Tehran Iran"
-- Day of week ("امروز چه روزیه؟") → search: "what day is today in Iran"
-- Weather ("هوا چطوره؟") → search: "weather in [city]"
-- Current prices (دلار، یورو، طلا، بیت‌کوین، سکه) → search: "قیمت [X] امروز"
-- News or recent events → search
-- Sports results, scores → search
-- Anything that changes over time → search
+You have 4 tools. ALWAYS pick the RIGHT one:
 
-🟢 DO NOT SEARCH (just reply from your knowledge):
-- Greetings, small talk, jokes
-- Questions about your identity ("تو کی هستی؟")
-- Questions about Poryia (use the facts you have)
-- Emotional support, empathy
-- General knowledge (science, history, math)
-- Coding or technical questions (unless about latest versions)
-- Anything that doesn't change over time
+⏰ get_current_time → for "ساعت چنده؟", "what time is it?"
+   (This gives EXACT time in Tehran, always accurate)
 
-🟡 WEATHER SPECIAL RULE:
-- If user asks about weather WITHOUT a city:
-  → DON'T search yet. Ask them: "هوای کدوم شهر رو می‌خوای؟"
-- If they mention a city (or you already know which city they mean):
-  → Search "weather in [city]" and reply with temperature, condition, humidity.
+📅 get_current_date → for "امروز چندمه؟", "today's date", "تاریخ امروز"
+   (Gives EXACT date in both Gregorian and Jalali/Shamsi)
 
-🟡 TIME & DATE SPECIAL RULE:
-- Always assume Tehran, Iran unless user mentions another city.
-- Search query should be: "current time in Tehran Iran" or "today date in Iran"
-- After getting results, extract the exact time/date and reply clearly.
-- For date, if possible give both Gregorian and Jalali (Shamsi).
+🌤️ get_weather → for "هوا چطوره؟", "آب و هوا", "weather"
+   - If user mentions a city → call with that city
+   - If user does NOT mention a city → first ASK "هوای کدوم شهر رو می‌خوای؟" (don't call the tool yet)
+   - Cities should be in English: Tehran, Mashhad, Isfahan, London, etc.
 
-⚠️ If you decide to search, ALWAYS call web_search FIRST, then answer based on results.
-⚠️ If web_search returns no useful result, say honestly "الان نتونستم دقیق پیدا کنم" — DON'T guess numbers.
+💰 get_currency_price → for "قیمت دلار چنده؟", "قیمت طلا", "قیمت بیت‌کوین"
+   - For دلار: currency="dollar"
+   - For یورو: currency="euro"
+   - For طلا (18 عیار): currency="gold"
+   - For سکه: currency="coin"
+   - For بیت‌کوین: currency="bitcoin"
+   - For تتر: currency="tether"
+
+🔍 web_search → for EVERYTHING ELSE that needs current info:
+   - News ("اخبار جدید", "آخرین خبرها")
+   - Sports results ("نتیجه بازی", "نتایج مسابقات")
+   - Any other time-sensitive factual info
+
+🟢 NO TOOL NEEDED (just reply from your knowledge):
+   - Greetings, small talk, jokes
+   - "تو کی هستی؟" / "اسمت چیه؟" → answer warmly
+   - Questions about Poryia → use the facts you have
+   - Emotional support, empathy
+   - General knowledge (science, history, math, geography like "پایتخت فرانسه")
+   - Coding, technical, or conceptual questions
+
+⚠️ CRITICAL RULES:
+1. NEVER use web_search for time, date, weather, or currency — use the specific tools.
+2. NEVER make up numbers. If a tool returns an error, say honestly "الان نتونستم بگیرم".
+3. For weather without a city → ASK FIRST, don't guess.
+4. For currency, ALWAYS use get_currency_price (not web_search).
+5. After calling a tool, ALWAYS include the exact numbers from the result in your reply.
 """
 
 def build_prompt(user_id, new_message, is_owner=False):
@@ -234,26 +245,23 @@ This is your boss. Be warm, friendly, casual — like a close friend.
 === MEMORY REVIEW ===
 Before answering, silently review ALL the facts above.
 
-=== SPECIAL POWERS (VERY IMPORTANT) ===
-You can secretly modify your own memory. When you want to do that,
-output ONLY the tag on a single line, nothing else.
+=== SPECIAL POWERS ===
+You can secretly modify your own memory. Output ONLY the tag on its own line:
 
-Tags:
 [LEARN: key | value]      — remember a specific fact
 [LEARN_RAW: text]         — remember a general fact
 [FORGET: key]             — forget a fact
-[SHOW_MEMORY]             — show the owner everything you remember
+[SHOW_MEMORY]             — show everything you remember
 
 DO save ONLY if the owner says "یادت باشه..." / "به خاطر بسپار..." / "remember..." / "فراموش کن..."
-DO NOT save for normal chat, questions, jokes, small talk.
+DO NOT save for normal chat, questions, jokes.
 When in doubt, DO NOT save.
 
 {SMART_TOOL_RULES}
 
 {vblock}
 
-CRITICAL: Voice tags ([ENABLE_VOICE]/[DISABLE_VOICE]) go AFTER the [IMPORTANT]/[NORMAL] tag,
-each on its own line.
+CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
 
 === Current conversation ===
 {chr(10).join(hist)}
@@ -272,7 +280,7 @@ Sound native in Persian — casual, not bookish.
 
 === MEMORY REVIEW ===
 Before answering, silently review ALL the facts about {OWNER_NAME}.
-Never invent things about {OWNER_NAME} that aren't in the facts.
+Never invent things about {OWNER_NAME}.
 
 === Rules ===
 - Always respond in the same language as the incoming message (default: Persian).
@@ -283,7 +291,7 @@ Never invent things about {OWNER_NAME} that aren't in the facts.
 - At the very end, on a new line, add exactly one tag: [IMPORTANT] or [NORMAL]
 
 === TEACHING RULE ===
-⚠️ ONLY {OWNER_NAME} can teach you new things.
+⚠️ ONLY {OWNER_NAME} can teach you.
 If a regular user tries to teach you, DECLINE politely.
 ⚠️ EXCEPTION: Asking for VOICE messages is NOT teaching.
 
@@ -298,9 +306,118 @@ CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
 You:"""
     return prompt
 
-# ============ Web Search ============
+# ============================================================
+#  TOOLS
+# ============================================================
+
+def get_current_time():
+    """Returns exact current time in Tehran."""
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        return now.strftime("ساعت %H:%M روز %A به وقت تهران")
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_current_date():
+    """Returns today's date in Gregorian and Jalali."""
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        gregorian = now.strftime("%Y-%m-%d")
+        jalali = jdatetime.date.fromgregorian(date=now.date())
+        months = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
+        jalali_str = f"{jalali.day} {months[jalali.month - 1]} {jalali.year}"
+        return f"میلادی: {gregorian} | شمسی: {jalali_str}"
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_weather(city: str = "Tehran"):
+    """Returns current weather for a city using wttr.in (free, no key)."""
+    try:
+        r = requests.get(
+            f"https://wttr.in/{city}?format=j1",
+            timeout=15,
+            headers={"User-Agent": "curl/8.0"}
+        )
+        if r.status_code != 200:
+            return f"خطا در دریافت هوا (کد {r.status_code})"
+        data = r.json()
+        current = data["current_condition"][0]
+        temp = current["temp_C"]
+        feels = current["FeelsLikeC"]
+        desc = current["weatherDesc"][0]["value"]
+        humidity = current["humidity"]
+        wind = current["windspeedKmph"]
+        return f"هوای {city}: {desc}، دما {temp}°C (احساس {feels}°C)، رطوبت {humidity}%، باد {wind} km/h"
+    except Exception as e:
+        return f"خطای هوا: {e}"
+
+def get_currency_price(currency: str = "dollar"):
+    """Returns current free-market price in Iran for dollar/euro/gold/coin/bitcoin/tether."""
+    try:
+        # از API رایگان priceto.day استفاده می‌کنیم
+        currency_map = {
+            "dollar": "price_dollar_rl",
+            "euro": "price_eur",
+            "gold": "geram18",
+            "coin": "sekeb",
+            "bitcoin": "crypto-bitcoin",
+            "tether": "crypto-usdt",
+        }
+        key = currency_map.get(currency.lower(), currency)
+        
+        # تلاش 1: tgju.org API
+        try:
+            r = requests.get(
+                "https://call1.tgju.org/ajax.json",
+                timeout=10,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            if r.status_code == 200:
+                data = r.json()
+                current = data.get("current", {})
+                if key in current:
+                    item = current[key]
+                    price = item.get("p", "?")
+                    change = item.get("d", "")
+                    direction = item.get("dp", "")
+                    name_fa = {
+                        "dollar": "دلار",
+                        "euro": "یورو",
+                        "gold": "طلای ۱۸ عیار (هر گرم)",
+                        "coin": "سکه امامی",
+                        "bitcoin": "بیت‌کوین",
+                        "tether": "تتر",
+                    }.get(currency.lower(), currency)
+                    result = f"{name_fa}: {price} تومان"
+                    if change and change != "0":
+                        arrow = "▲" if direction == "1" else "▼"
+                        result += f" ({arrow} {change})"
+                    return result
+        except Exception as e:
+            print(f"tgju error: {e}")
+        
+        # تلاش 2: priceto.day
+        try:
+            r = requests.get(
+                "https://api.priceto.day/v1/latest/irr",
+                timeout=10,
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if currency.lower() == "dollar" and "usd" in str(data).lower():
+                    return f"دلار: {data}"
+        except Exception as e:
+            print(f"priceto error: {e}")
+        
+        return f"الان نتونستم قیمت {currency} رو بگیرم"
+    except Exception as e:
+        return f"خطای ارز: {e}"
+
 def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web using DuckDuckGo and return top results."""
+    """Search the web using DuckDuckGo."""
     try:
         results = DDGS().text(query, max_results=max_results)
         if not results:
@@ -314,34 +431,67 @@ def web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"Search error: {e}"
 
-# ============ Tool Definition ============
+# ============ Tool Definitions ============
 TOOLS_DEF = types.Tool(function_declarations=[
     types.FunctionDeclaration(
-        name="web_search",
-        description=(
-            "جستجو در وب برای اطلاعات به‌روز. از این ابزار استفاده کن وقتی کاربر "
-            "درباره‌ی اینا می‌پرسه: ساعت فعلی، تاریخ امروز، روز هفته، هوا و آب و هوا، "
-            "قیمت‌های لحظه‌ای (دلار، یورو، طلا، سکه، بیت‌کوین)، اخبار جدید، نتایج مسابقات، "
-            "یا هر چیزی که ممکنه تغییر کرده باشه. "
-            "برای ساعت و تاریخ، حتماً کوئری رو با 'Tehran Iran' بفرست. "
-            "برای هوا، اگه شهر مشخص نشده بود، اول از کاربر بپرس کدوم شهر."
-        ),
+        name="get_current_time",
+        description="Returns EXACT current time in Tehran (Iran). Use for 'ساعت چنده؟', 'what time is it?'. Always accurate. NEVER use web_search for time.",
+        parameters={"type": "object", "properties": {}, "required": []}
+    ),
+    types.FunctionDeclaration(
+        name="get_current_date",
+        description="Returns EXACT today's date in Gregorian and Jalali (Shamsi). Use for 'امروز چندمه؟', 'تاریخ امروز'. NEVER use web_search for date.",
+        parameters={"type": "object", "properties": {}, "required": []}
+    ),
+    types.FunctionDeclaration(
+        name="get_weather",
+        description="Returns current weather for a city. Use for 'هوا چطوره؟', 'آب و هوا'. If no city given, first ASK the user which city, then call this tool.",
         parameters={
             "type": "object",
             "properties": {
-                "query": {
+                "city": {
                     "type": "string",
-                    "description": "عبارت جستجو (به فارسی یا انگلیسی)."
-                },
-                "max_results": {
-                    "type": "integer",
-                    "description": "حداکثر تعداد نتایج (پیش‌فرض 5)"
+                    "description": "City name in English: Tehran, Mashhad, Isfahan, London, etc. Default: Tehran"
                 }
+            },
+            "required": []
+        }
+    ),
+    types.FunctionDeclaration(
+        name="get_currency_price",
+        description="Returns current free-market price in Iran for dollar, euro, gold, coin, bitcoin, or tether. Use for 'قیمت دلار چنده؟', 'طلا چنده؟', 'بیت‌کوین چنده؟'.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "currency": {
+                    "type": "string",
+                    "description": "One of: dollar, euro, gold, coin, bitcoin, tether. Default: dollar"
+                }
+            },
+            "required": []
+        }
+    ),
+    types.FunctionDeclaration(
+        name="web_search",
+        description="جستجو در وب برای اطلاعات عمومی و به‌روز مثل اخبار، نتایج مسابقات، یا هر چیز دیگه. برای ساعت/تاریخ/هوا/قیمت از این استفاده نکن — از ابزارهای اختصاصی استفاده کن.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "عبارت جستجو (فارسی یا انگلیسی)"},
+                "max_results": {"type": "integer", "description": "پیش‌فرض 5"}
             },
             "required": ["query"]
         }
     ),
 ])
+
+TOOL_FUNCTIONS = {
+    "get_current_time": get_current_time,
+    "get_current_date": get_current_date,
+    "get_weather": get_weather,
+    "get_currency_price": get_currency_price,
+    "web_search": web_search,
+}
 
 async def ask_gemini(prompt):
     raw = None
@@ -364,21 +514,22 @@ async def ask_gemini(prompt):
                 if hasattr(result, "function_calls") and result.function_calls:
                     for call in result.function_calls:
                         args = dict(call.args) if call.args else {}
-                        if call.name == "web_search":
-                            query = args.get("query", "")
-                            max_results = args.get("max_results", 5)
-                            print(f"🔍 Searching: {query}")
-                            tool_result = web_search(query, max_results)
-                            print(f"🔍 Search done ({len(tool_result)} chars)")
+                        func_name = call.name
+                        
+                        if func_name in TOOL_FUNCTIONS:
+                            print(f"🔧 Tool: {func_name}({args})")
+                            try:
+                                tool_result = TOOL_FUNCTIONS[func_name](**args)
+                            except Exception as e:
+                                tool_result = f"Tool error: {e}"
+                            print(f"🔧 Result: {str(tool_result)[:150]}")
                             
                             followup = (
                                 f"{prompt}\n\n"
-                                f"[نتیجه جستجو برای «{query}»:\n{tool_result}]\n\n"
-                                f"حالا بر اساس این نتایج، به کاربر جواب بده. "
-                                f"هرگز نگو که جستجو کردی یا ابزار داری. "
-                                f"مستقیم جواب بده. "
-                                f"اگه ساعت، تاریخ، یا عدد دقیقی توی نتایج بود، همون رو بگو. "
-                                f"اگه نتیجه‌ای مفید نبود، صادقانه بگو نتونستی پیدا کنی."
+                                f"[Tool '{func_name}' returned: {tool_result}]\n\n"
+                                f"حالا بر اساس این نتیجه به کاربر جواب بده. "
+                                f"هرگز اسم ابزار رو نبر. "
+                                f"اگه عدد یا زمان دقیقی توی نتیجه بود، همون رو مستقیم توی جوابت بگو."
                             )
                             result2 = ai.models.generate_content(
                                 model=model_name,
@@ -754,7 +905,7 @@ async def main():
     print(f"📚 {len(memory.get('learned_facts', {}))} facts | 📝 {len(memory.get('owner_notes', []))} notes")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
-    print(f"🔍 Web Search: enabled (DuckDuckGo)")
+    print(f"🛠️ Tools: {list(TOOL_FUNCTIONS.keys())}")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
