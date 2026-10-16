@@ -1,6 +1,8 @@
 import os
 import json
+import base64
 import asyncio
+import requests
 from pathlib import Path
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
@@ -13,6 +15,12 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 OWNER_ID = int(os.environ["OWNER_ID"])
 OWNER_NAME = os.environ.get("OWNER_NAME", "Poryia")
 
+# GitHub memory
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
+GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
+GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
+MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
+
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELS = [
@@ -20,9 +28,6 @@ MODELS = [
     "gemini-3.6-flash",
     "gemini-3.5-flash-lite",
 ]
-
-# ============ مسیر فایل حافظه ============
-MEMORY_FILE = Path("memory.json")
 
 # ============ اطلاعات پایه مالک ============
 OWNER_INFO_BASE = """
@@ -43,36 +48,84 @@ Notes:
   - If someone's reaching out about a project or tech-related, that's usually important.
 """
 
-# ============ توابع حافظه ============
-def load_memory():
-    if MEMORY_FILE.exists():
-        try:
-            with open(MEMORY_FILE, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception as e:
-            print(f"⚠️ Memory load error: {e}")
-    return {"conversations": {}, "learned_facts": {}, "owner_notes": []}
+# ============ GitHub Memory ============
+def github_headers():
+    return {
+        "Authorization": f"token {GITHUB_TOKEN}",
+        "Accept": "application/vnd.github+json",
+    }
 
-def save_memory(memory):
+def fetch_memory():
+    """حافظه رو از گیت‌هاب می‌خونه"""
+    if not GITHUB_TOKEN:
+        print("⚠️ No GITHUB_TOKEN — using empty memory")
+        return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
+    
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     try:
-        with open(MEMORY_FILE, "w", encoding="utf-8") as f:
-            json.dump(memory, f, ensure_ascii=False, indent=2)
+        r = requests.get(url, headers=github_headers(), params={"ref": GITHUB_BRANCH}, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            content = base64.b64decode(data["content"]).decode("utf-8")
+            return json.loads(content), data["sha"]
+        elif r.status_code == 404:
+            print("ℹ️ memory.json not found on GitHub — starting fresh")
+            return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
+        else:
+            print(f"⚠️ GitHub fetch error: {r.status_code} {r.text[:200]}")
     except Exception as e:
-        print(f"⚠️ Memory save error: {e}")
+        print(f"⚠️ GitHub fetch exception: {e}")
+    
+    return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
 
-# بارگذاری حافظه در شروع
-memory = load_memory()
+def push_memory(mem):
+    """حافظه رو توی گیت‌هاب ذخیره می‌کنه"""
+    if not GITHUB_TOKEN:
+        return
+    
+    url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
+    
+    # اول SHA فعلی رو بگیر
+    _, sha = fetch_memory()
+    
+    content = base64.b64encode(
+        json.dumps(mem, ensure_ascii=False, indent=2).encode("utf-8")
+    ).decode("utf-8")
+    
+    payload = {
+        "message": "Update AI memory",
+        "content": content,
+        "branch": GITHUB_BRANCH,
+    }
+    if sha:
+        payload["sha"] = sha
+    
+    try:
+        r = requests.put(url, headers=github_headers(), json=payload, timeout=15)
+        if r.status_code in (200, 201):
+            print("💾 Memory synced to GitHub")
+        else:
+            print(f"⚠️ GitHub push error: {r.status_code} {r.text[:200]}")
+    except Exception as e:
+        print(f"⚠️ GitHub push exception: {e}")
+
+def save_memory_async():
+    """ذخیره غیرهمزمان (بلاک نکنه)"""
+    loop = asyncio.get_event_loop()
+    loop.run_in_executor(None, push_memory, memory)
+
+# ============ بارگذاری اولیه ============
+memory, _sha = fetch_memory()
 histories = memory.get("conversations", {})
 MAX_HISTORY = 12
 
 def build_owner_info():
-    """اطلاعات مالک + چیزایی که بهش یاد دادیم"""
     info = OWNER_INFO_BASE
     facts = memory.get("learned_facts", {})
     notes = memory.get("owner_notes", [])
     
     if facts:
-        info += "\n\n=== Learned facts about Poryia ===\n"
+        info += "\n\n=== Learned facts (from owner) ===\n"
         for key, value in facts.items():
             info += f"- {key}: {value}\n"
     
@@ -89,28 +142,59 @@ def build_prompt(user_id, new_message, is_owner=False):
     del hist[:-MAX_HISTORY]
     
     if is_owner:
-        # پرامپت مخصوص ادمین (Saved Messages)
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
-You are currently talking to {OWNER_NAME} THEMSELVES in their Saved Messages (admin panel).
+You are talking to {OWNER_NAME} THEMSELVES in their Saved Messages.
 
-This is your boss. Be warm, friendly, and casual with them. You can be yourself.
-If they tell you to learn something, acknowledge it warmly.
+This is your boss. Be warm, friendly, casual — like a close friend.
 
 === About your boss ===
 {build_owner_info()}
 
-=== Current admin conversation ===
+=== SPECIAL POWERS (VERY IMPORTANT) ===
+You can secretly modify your own memory. When you want to do that,
+output ONLY the tag on a single line, nothing else.
+
+Tags you can use:
+[LEARN: key | value]      — remember a specific fact
+[LEARN_RAW: text]         — remember a general fact without a key
+[FORGET: key]             — forget a fact
+[SHOW_MEMORY]             — show the owner everything you remember
+
+When to use them:
+- If the owner tells you something to remember → use [LEARN] or [LEARN_RAW]
+- If the owner says forget something → use [FORGET]
+- If the owner asks what you know / what you remember → use [SHOW_MEMORY]
+- If the owner just chats normally → reply normally, NO tags
+
+Examples:
+Owner: یادت باشه اسم بهترین دوستم علیه
+You: [LEARN: best_friend | Ali]
+
+Owner: راستی یادت باشه من یه پروژه VPN دارم
+You: [LEARN_RAW: Poryia has a personal VPN project]
+
+Owner: اون چیز درباره بهترین دوستمو فراموش کن
+You: [FORGET: best_friend]
+
+Owner: چی یادت هست درباره من؟
+You: [SHOW_MEMORY]
+
+Owner: سلام، خوبی؟
+You: سلام خودم! 😄 من خوبم، تو چطوری؟ چه خبر از باشگاه؟
+
+Owner: امروز رفتم باشگاه، خیلی خسته‌ام
+You: آفرین 💪 خستگی بعد از تمرین بهترین حس دنیاست. یه آب بخور و استراحت کن.
+
+=== Current conversation ===
 {chr(10).join(hist)}
 You:"""
     else:
-        # پرامپت مخصوص کاربران عادی
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You answer Telegram messages on their behalf while they are away.
 
-You're not a stiff corporate bot. You're like a warm, funny, loyal friend.
-Use emojis naturally (1-3 per message). Match the user's energy.
-If someone's stressed, acknowledge their feeling first.
-Sound native in Persian — use casual, everyday Persian.
+You're warm, funny, and real — like a close friend. Use emojis naturally.
+Match the user's energy. If someone's stressed, acknowledge first.
+Sound native in Persian — casual, not bookish.
 
 === About your boss ===
 {build_owner_info()}
@@ -120,14 +204,12 @@ Sound native in Persian — use casual, everyday Persian.
 - If asked who you are, say you're "{OWNER_NAME}'s AI assistant" warmly.
 - Never pretend to be {OWNER_NAME} themselves.
 - If important, tell the user you'll notify {OWNER_NAME}.
-- Keep replies short and natural (1-3 sentences usually).
-- At the very end, on a new line, add exactly one tag:
-  [IMPORTANT] or [NORMAL]
+- Keep replies short (1-3 sentences).
+- At the very end, on a new line, add exactly one tag: [IMPORTANT] or [NORMAL]
 
 === Current conversation ===
 {chr(10).join(hist)}
 You:"""
-    
     return prompt
 
 async def ask_gemini(prompt):
@@ -148,84 +230,16 @@ async def ask_gemini(prompt):
             continue
     return raw, last_error
 
-# ============ کلاینت ============
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
-# ============ هندلر ادمین (Saved Messages) ============
+# ============ هندلر ادمین ============
 @client.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private and e.chat_id == OWNER_ID))
 async def on_owner_message(event):
-    """وقتی خودت توی Saved Messages پیام می‌فرستی"""
     text = event.message.text or ""
     if not text.strip():
         return
     
-    # دستورات ویژه
-    if text.startswith("/learn "):
-        content = text[7:].strip()
-        if "=" in content:
-            key, value = content.split("=", 1)
-            memory.setdefault("learned_facts", {})[key.strip()] = value.strip()
-            save_memory(memory)
-            await event.reply(f"✅ یاد گرفتم: **{key.strip()}** = {value.strip()}")
-        else:
-            # اگه = نبود، به عنوان یه فکت کلی ذخیره کن
-            fact_id = f"fact_{len(memory.get('learned_facts', {})) + 1}"
-            memory.setdefault("learned_facts", {})[fact_id] = content
-            save_memory(memory)
-            await event.reply(f"✅ یاد گرفتم: {content}")
-        return
-    
-    if text == "/memory":
-        facts = memory.get("learned_facts", {})
-        notes = memory.get("owner_notes", [])
-        reply = "📚 **حافظه‌ی من:**\n\n"
-        if facts:
-            reply += "**فکت‌های یادگرفته:**\n"
-            for k, v in facts.items():
-                reply += f"• {k}: {v}\n"
-        else:
-            reply += "هنوز چیزی یاد نگرفتم.\n"
-        if notes:
-            reply += "\n**یادداشت‌ها:**\n"
-            for n in notes:
-                reply += f"• {n}\n"
-        await event.reply(reply)
-        return
-    
-    if text.startswith("/forget "):
-        key = text[8:].strip()
-        facts = memory.get("learned_facts", {})
-        if key in facts:
-            del facts[key]
-            save_memory(memory)
-            await event.reply(f"🗑️ فراموش کردم: {key}")
-        else:
-            await event.reply(f"❌ چنین چیزی توی حافظه‌ام نیست: {key}")
-        return
-    
-    if text.startswith("/note "):
-        note = text[6:].strip()
-        memory.setdefault("owner_notes", []).append(note)
-        save_memory(memory)
-        await event.reply(f"📝 یادداشت اضافه شد: {note}")
-        return
-    
-    if text == "/help":
-        await event.reply(
-            "🤖 **دستورات ادمین:**\n\n"
-            "/learn کلید = مقدار — یاد گرفتن یه فکت\n"
-            "/learn یه متن — یاد گرفتن یه فکت کلی\n"
-            "/memory — دیدن حافظه\n"
-            "/forget کلید — فراموش کردن یه فکت\n"
-            "/note متن — اضافه کردن یادداشت\n"
-            "/help — همین راهنما\n\n"
-            "💬 **گفتگوی آزاد:**\n"
-            "هر پیام دیگه‌ای بفرستی، به‌عنوان چت با AI جواب داده می‌شه."
-        )
-        return
-    
-    # اگه دستور نبود، به‌عنوان چت با AI جواب بده
     prompt = build_prompt("owner", text, is_owner=True)
     raw, last_error = await ask_gemini(prompt)
     
@@ -233,14 +247,69 @@ async def on_owner_message(event):
         await event.reply(f"❌ خطا: {last_error}")
         return
     
-    # پاکسازی تگ‌ها
+    # ==== پردازش تگ‌های مخفی ====
+    if "[LEARN:" in raw:
+        try:
+            inner = raw.split("[LEARN:", 1)[1].split("]", 1)[0].strip()
+            if "|" in inner:
+                key, value = inner.split("|", 1)
+                memory.setdefault("learned_facts", {})[key.strip()] = value.strip()
+                save_memory_async()
+                await event.reply(f"✅ گرفتم! یادم می‌مونه: {key.strip()} → {value.strip()}")
+                return
+        except Exception as e:
+            print(f"LEARN parse error: {e}")
+    
+    if "[LEARN_RAW:" in raw:
+        try:
+            inner = raw.split("[LEARN_RAW:", 1)[1].split("]", 1)[0].strip()
+            fact_id = f"fact_{len(memory.get('learned_facts', {})) + 1}"
+            memory.setdefault("learned_facts", {})[fact_id] = inner
+            save_memory_async()
+            await event.reply(f"✅ گرفتم! یادم می‌مونه: {inner}")
+            return
+        except Exception as e:
+            print(f"LEARN_RAW parse error: {e}")
+    
+    if "[FORGET:" in raw:
+        try:
+            key = raw.split("[FORGET:", 1)[1].split("]", 1)[0].strip()
+            facts = memory.get("learned_facts", {})
+            if key in facts:
+                del facts[key]
+                save_memory_async()
+                await event.reply(f"🗑️ باشه، فراموش کردم: {key}")
+            else:
+                await event.reply(f"❓ همچین چیزی توی حافظه‌ام نبود: {key}")
+            return
+        except Exception as e:
+            print(f"FORGET parse error: {e}")
+    
+    if "[SHOW_MEMORY]" in raw:
+        facts = memory.get("learned_facts", {})
+        notes = memory.get("owner_notes", [])
+        reply = "🧠 **چیزایی که یادمه:**\n\n"
+        if facts:
+            reply += "**درباره تو:**\n"
+            for k, v in facts.items():
+                reply += f"• {k}: {v}\n"
+        else:
+            reply += "هنوز چیز خاصی یاد نگرفتم.\n"
+        if notes:
+            reply += "\n**یادداشت‌ها:**\n"
+            for n in notes:
+                reply += f"• {n}\n"
+        await event.reply(reply)
+        return
+    
+    # ==== پاسخ عادی ====
     reply = raw.replace("[IMPORTANT]", "").replace("[NORMAL]", "").strip()
     if not reply:
         return
     
-    # ذخیره توی تاریخچه
     histories.setdefault("owner", []).append(f"You: {reply}")
-    save_memory(memory)
+    memory["conversations"] = histories
+    save_memory_async()
     
     await event.reply(reply)
 
@@ -268,10 +337,9 @@ async def on_dm(event):
     if not reply:
         return
 
-    # ذخیره توی تاریخچه و حافظه
     histories.setdefault(str(sender.id), []).append(f"You: {reply}")
     memory["conversations"] = histories
-    save_memory(memory)
+    save_memory_async()
 
     await event.reply(reply)
 
@@ -293,7 +361,7 @@ async def main():
     me = await client.get_me()
     print(f"✅ Logged in as {me.first_name} (id={me.id})")
     print("🚀 Userbot is running...")
-    print(f"📚 Loaded {len(memory.get('learned_facts', {}))} learned facts")
+    print(f"📚 Loaded {len(memory.get('learned_facts', {}))} facts from GitHub")
     print(f"💬 Loaded {len(memory.get('conversations', {}))} conversations")
     await client.run_until_disconnected()
 
