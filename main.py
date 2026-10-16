@@ -11,6 +11,7 @@ from telethon.sessions import StringSession
 from google import genai
 from google.genai import types
 import edge_tts
+from ddgs import DDGS
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
@@ -284,13 +285,38 @@ CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
 You:"""
     return prompt
 
+def web_search(query: str, max_results: int = 5) -> str:
+    """جستجو در وب با DuckDuckGo و برگرداندن خلاصه‌ی نتایج برتر.
+    از این ابزار استفاده کن وقتی به اطلاعات به‌روز، واقعی، یا خارجی نیاز داری
+    که توی دانش خودت نداری (اخبار، قیمت لحظه‌ای، رویدادها، آب و هوا، ساعت و تاریخ،
+    نتیجه‌ی مسابقات و هر چیز دیگه‌ای که ممکنه تغییر کرده باشه)."""
+    try:
+        results = DDGS().text(query, max_results=max_results)
+        if not results:
+            return "No results found."
+        summary = ""
+        for i, r in enumerate(results, 1):
+            summary += f"{i}. {r.get('title', 'No title')}\n"
+            summary += f"   {r.get('body', 'No description')}\n"
+            summary += f"   Link: {r.get('href', 'No link')}\n\n"
+        return summary
+    except Exception as e:
+        return f"Search error: {e}"
+
 async def ask_gemini(prompt):
     raw = None
     last_error = None
     for attempt in range(2):
         for model_name in MODELS:
             try:
-                result = ai.models.generate_content(model=model_name, contents=prompt)
+                # استفاده از automatic function calling
+                config = types.GenerateContentConfig(tools=[web_search])
+                
+                result = ai.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                    config=config,
+                )
                 raw = (result.text or "").strip()
                 if raw:
                     print(f"✅ Response from {model_name}")
@@ -662,6 +688,7 @@ async def main():
     print(f"📚 {len(memory.get('learned_facts', {}))} facts | 💬 {len(memory.get('conversations', {}))} convos")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
+    print(f"🔍 Web Search: enabled (DuckDuckGo)")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
