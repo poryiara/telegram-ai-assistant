@@ -1,0 +1,862 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<meta name="theme-color" content="#0a0a1a">
+<title>Poryia AI Control</title>
+<link rel="manifest" href="manifest.json">
+<link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/lucide@latest"></script>
+<style>
+  * { -webkit-tap-highlight-color: transparent; }
+  body {
+    font-family: 'Vazirmatn', sans-serif;
+    background: #0a0a1a;
+    color: #fff;
+    overflow-x: hidden;
+    min-height: 100vh;
+  }
+  /* Animated gradient background */
+  .bg-animated {
+    position: fixed;
+    inset: 0;
+    background: linear-gradient(135deg, #0a0a1a 0%, #1a0a2e 25%, #0a1a2e 50%, #1a0a2e 75%, #0a0a1a 100%);
+    background-size: 400% 400%;
+    animation: gradientMove 20s ease infinite;
+    z-index: -2;
+  }
+  @keyframes gradientMove {
+    0%,100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+  /* Floating orbs */
+  .orb {
+    position: fixed;
+    border-radius: 50%;
+    filter: blur(80px);
+    opacity: 0.4;
+    z-index: -1;
+    pointer-events: none;
+  }
+  .orb-1 { width: 300px; height: 300px; background: #8b5cf6; top: -100px; right: -100px; animation: float1 15s ease-in-out infinite; }
+  .orb-2 { width: 250px; height: 250px; background: #06b6d4; bottom: -80px; left: -80px; animation: float2 18s ease-in-out infinite; }
+  .orb-3 { width: 200px; height: 200px; background: #ec4899; top: 40%; left: 30%; animation: float3 20s ease-in-out infinite; }
+  @keyframes float1 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-50px,50px) scale(1.2); } }
+  @keyframes float2 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(50px,-30px) scale(1.1); } }
+  @keyframes float3 { 0%,100% { transform: translate(0,0) scale(1); } 50% { transform: translate(-30px,-50px) scale(1.3); } }
+
+  /* Glassmorphism */
+  .glass {
+    background: rgba(255,255,255,0.05);
+    backdrop-filter: blur(20px);
+    -webkit-backdrop-filter: blur(20px);
+    border: 1px solid rgba(255,255,255,0.1);
+  }
+  .glass-strong {
+    background: rgba(255,255,255,0.08);
+    backdrop-filter: blur(25px);
+    -webkit-backdrop-filter: blur(25px);
+    border: 1px solid rgba(255,255,255,0.15);
+  }
+
+  /* Page transitions */
+  .page { display: none; animation: pageIn 0.4s cubic-bezier(0.4,0,0.2,1); }
+  .page.active { display: block; }
+  @keyframes pageIn {
+    from { opacity: 0; transform: translateY(20px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  /* Tab bar */
+  .tab-item {
+    transition: all 0.3s cubic-bezier(0.4,0,0.2,1);
+    position: relative;
+  }
+  .tab-item.active {
+    color: #a78bfa;
+    transform: translateY(-2px);
+  }
+  .tab-item.active::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    left: 50%;
+    transform: translateX(-50%);
+    width: 24px;
+    height: 3px;
+    border-radius: 3px;
+    background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+    animation: tabIndicator 0.3s ease;
+  }
+  @keyframes tabIndicator { from { width: 0; } to { width: 24px; } }
+
+  /* Toggle switch */
+  .toggle {
+    width: 52px;
+    height: 28px;
+    border-radius: 14px;
+    background: rgba(255,255,255,0.1);
+    position: relative;
+    cursor: pointer;
+    transition: background 0.3s;
+  }
+  .toggle.on {
+    background: linear-gradient(90deg, #8b5cf6, #06b6d4);
+  }
+  .toggle::after {
+    content: '';
+    position: absolute;
+    top: 3px;
+    right: 3px;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: #fff;
+    transition: transform 0.3s cubic-bezier(0.4,0,0.2,1);
+  }
+  .toggle.on::after {
+    transform: translateX(-24px);
+  }
+
+  /* Slider */
+  input[type="range"] {
+    -webkit-appearance: none;
+    width: 100%;
+    height: 6px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.1);
+    outline: none;
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+    cursor: pointer;
+    box-shadow: 0 0 20px rgba(139,92,246,0.6);
+    transition: transform 0.2s;
+  }
+  input[type="range"]::-webkit-slider-thumb:active {
+    transform: scale(1.2);
+  }
+
+  /* Pulse dot */
+  .pulse-dot {
+    width: 10px;
+    height: 10px;
+    border-radius: 50%;
+    background: #10b981;
+    box-shadow: 0 0 0 0 rgba(16,185,129,0.7);
+    animation: pulse 2s infinite;
+  }
+  .pulse-dot.offline { background: #ef4444; box-shadow: 0 0 0 0 rgba(239,68,68,0.7); }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(16,185,129,0.7); }
+    70% { box-shadow: 0 0 0 10px rgba(16,185,129,0); }
+    100% { box-shadow: 0 0 0 0 rgba(16,185,129,0); }
+  }
+
+  /* Card hover */
+  .card-hover { transition: transform 0.3s cubic-bezier(0.4,0,0.2,1), box-shadow 0.3s; }
+  .card-hover:active { transform: scale(0.98); }
+
+  /* Skeleton loading */
+  .skeleton {
+    background: linear-gradient(90deg, rgba(255,255,255,0.05) 25%, rgba(255,255,255,0.1) 50%, rgba(255,255,255,0.05) 75%);
+    background-size: 200% 100%;
+    animation: skeleton 1.5s infinite;
+    border-radius: 8px;
+  }
+  @keyframes skeleton {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* Toast */
+  .toast {
+    position: fixed;
+    top: 20px;
+    left: 50%;
+    transform: translateX(-50%) translateY(-100px);
+    padding: 12px 24px;
+    border-radius: 12px;
+    font-weight: 500;
+    z-index: 9999;
+    transition: transform 0.4s cubic-bezier(0.4,0,0.2,1);
+    backdrop-filter: blur(20px);
+  }
+  .toast.show { transform: translateX(-50%) translateY(0); }
+  .toast.success { background: rgba(16,185,129,0.9); color: #fff; }
+  .toast.error { background: rgba(239,68,68,0.9); color: #fff; }
+
+  /* Login screen */
+  .login-input {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #fff;
+    padding: 14px 18px;
+    border-radius: 12px;
+    width: 100%;
+    font-family: 'Vazirmatn', sans-serif;
+    transition: all 0.3s;
+    direction: ltr;
+    text-align: center;
+  }
+  .login-input:focus {
+    outline: none;
+    border-color: #8b5cf6;
+    box-shadow: 0 0 0 3px rgba(139,92,246,0.2);
+  }
+
+  /* Button */
+  .btn-primary {
+    background: linear-gradient(135deg, #8b5cf6, #06b6d4);
+    color: #fff;
+    padding: 14px 24px;
+    border-radius: 12px;
+    font-weight: 600;
+    border: none;
+    cursor: pointer;
+    width: 100%;
+    font-family: 'Vazirmatn', sans-serif;
+    transition: all 0.3s;
+    position: relative;
+    overflow: hidden;
+  }
+  .btn-primary:active { transform: scale(0.97); }
+  .btn-primary::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(135deg, #06b6d4, #8b5cf6);
+    opacity: 0;
+    transition: opacity 0.3s;
+  }
+  .btn-primary:hover::before { opacity: 1; }
+  .btn-primary span { position: relative; z-index: 1; }
+
+  .btn-danger {
+    background: linear-gradient(135deg, #ef4444, #f59e0b);
+  }
+
+  .btn-ghost {
+    background: rgba(255,255,255,0.05);
+    border: 1px solid rgba(255,255,255,0.1);
+    color: #fff;
+    padding: 10px 16px;
+    border-radius: 10px;
+    font-family: 'Vazirmatn', sans-serif;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-size: 14px;
+  }
+  .btn-ghost:active { transform: scale(0.95); background: rgba(255,255,255,0.1); }
+
+  /* Hide scrollbar */
+  ::-webkit-scrollbar { display: none; }
+
+  /* Log entry */
+  .log-entry {
+    border-right: 3px solid #8b5cf6;
+    padding-right: 12px;
+    margin-bottom: 8px;
+    font-size: 12px;
+    animation: logIn 0.4s ease;
+  }
+  @keyframes logIn {
+    from { opacity: 0; transform: translateX(20px); }
+    to { opacity: 1; transform: translateX(0); }
+  }
+
+  /* Pulse animation for status card */
+  .glow-pulse {
+    animation: glowPulse 3s ease-in-out infinite;
+  }
+  @keyframes glowPulse {
+    0%,100% { box-shadow: 0 0 20px rgba(139,92,246,0.3); }
+    50% { box-shadow: 0 0 40px rgba(139,92,246,0.6); }
+  }
+
+  /* Splash */
+  #splash {
+    position: fixed;
+    inset: 0;
+    background: #0a0a1a;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 99999;
+    transition: opacity 0.5s;
+  }
+  .splash-logo {
+    font-size: 48px;
+    font-weight: 800;
+    background: linear-gradient(135deg, #8b5cf6, #06b6d4, #ec4899);
+    background-size: 200% 200%;
+    -webkit-background-clip: text;
+    -webkit-text-fill-color: transparent;
+    animation: splashGrad 2s ease infinite;
+  }
+  @keyframes splashGrad {
+    0%,100% { background-position: 0% 50%; }
+    50% { background-position: 100% 50%; }
+  }
+</style>
+</head>
+<body>
+
+<div class="bg-animated"></div>
+<div class="orb orb-1"></div>
+<div class="orb orb-2"></div>
+<div class="orb orb-3"></div>
+
+<!-- Splash -->
+<div id="splash">
+  <div class="text-center">
+    <div class="splash-logo">Poryia AI</div>
+    <div class="text-gray-400 mt-4 text-sm">در حال بارگذاری...</div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div id="toast" class="toast"></div>
+
+<!-- Login Screen -->
+<div id="loginScreen" class="hidden min-h-screen flex items-center justify-center p-6">
+  <div class="glass-strong rounded-3xl p-8 w-full max-w-sm">
+    <div class="text-center mb-8">
+      <div class="text-4xl font-bold bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent mb-2">Poryia AI</div>
+      <div class="text-gray-400 text-sm">کنترل پنل ربات</div>
+    </div>
+    <div class="mb-4">
+      <label class="block text-sm text-gray-400 mb-2">API Key</label>
+      <input id="apiKeyInput" type="password" class="login-input" placeholder="کلید API رو وارد کن" />
+    </div>
+    <button onclick="login()" class="btn-primary"><span>ورود</span></button>
+    <div class="text-center mt-4 text-xs text-gray-500">Powered by Gemini</div>
+  </div>
+</div>
+
+<!-- Main App -->
+<div id="mainApp" class="hidden pb-24">
+
+  <!-- Header -->
+  <div class="glass-strong sticky top-0 z-40 px-4 py-3 flex items-center justify-between" style="border-radius: 0 0 24px 24px;">
+    <div class="flex items-center gap-3">
+      <div class="w-10 h-10 rounded-full bg-gradient-to-br from-purple-500 to-cyan-500 flex items-center justify-center text-lg">🤖</div>
+      <div>
+        <div class="font-bold text-sm">Poryia AI</div>
+        <div class="text-xs text-gray-400 flex items-center gap-2">
+          <span id="headerDot" class="pulse-dot"></span>
+          <span id="headerStatus">در حال اتصال...</span>
+        </div>
+      </div>
+    </div>
+    <button onclick="logout()" class="btn-ghost text-xs">خروج</button>
+  </div>
+
+  <!-- Dashboard Page -->
+  <div id="page-dashboard" class="page active px-4 pt-6">
+    <h1 class="text-2xl font-bold mb-1">داشبورد</h1>
+    <p class="text-gray-400 text-sm mb-6">وضعیت لحظه‌ای ربات</p>
+
+    <div class="grid grid-cols-2 gap-3 mb-6">
+      <div class="glass-strong rounded-2xl p-4 card-hover">
+        <div class="flex items-center gap-2 text-xs text-gray-400 mb-2">
+          <i data-lucide="clock" class="w-3 h-3"></i>
+          <span>آپ‌تایم</span>
+        </div>
+        <div id="statUptime" class="text-xl font-bold">-</div>
+      </div>
+      <div class="glass-strong rounded-2xl p-4 card-hover">
+        <div class="flex items-center gap-2 text-xs text-gray-400 mb-2">
+          <i data-lucide="brain" class="w-3 h-3"></i>
+          <span>فکت‌ها</span>
+        </div>
+        <div id="statFacts" class="text-xl font-bold">-</div>
+      </div>
+      <div class="glass-strong rounded-2xl p-4 card-hover">
+        <div class="flex items-center gap-2 text-xs text-gray-400 mb-2">
+          <i data-lucide="pause-circle" class="w-3 h-3"></i>
+          <span>pause ها</span>
+        </div>
+        <div id="statPaused" class="text-xl font-bold">-</div>
+      </div>
+      <div class="glass-strong rounded-2xl p-4 card-hover">
+        <div class="flex items-center gap-2 text-xs text-gray-400 mb-2">
+          <i data-lucide="users" class="w-3 h-3"></i>
+          <span>کاربر ویس</span>
+        </div>
+        <div id="statVoice" class="text-xl font-bold">-</div>
+      </div>
+    </div>
+
+    <div class="glass-strong rounded-2xl p-4 mb-4 glow-pulse">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-sm text-gray-400 mb-1">وضعیت ربات</div>
+          <div id="botStatus" class="font-bold">-</div>
+        </div>
+        <button onclick="refreshAll()" class="btn-ghost flex items-center gap-2">
+          <i data-lucide="refresh-cw" class="w-4 h-4"></i>
+          <span>بروزرسانی</span>
+        </button>
+      </div>
+    </div>
+
+    <button onclick="resumeAll()" class="btn-primary mb-3"><span>▶️ Resume همه چت‌ها</span></button>
+  </div>
+
+  <!-- Settings Page -->
+  <div id="page-settings" class="page px-4 pt-6">
+    <h1 class="text-2xl font-bold mb-1">تنظیمات</h1>
+    <p class="text-gray-400 text-sm mb-6">تغییر رفتار ربات</p>
+
+    <div class="glass-strong rounded-2xl p-4 mb-3 flex items-center justify-between card-hover">
+      <div>
+        <div class="font-bold text-sm">فعال بودن Pause</div>
+        <div class="text-xs text-gray-400">وقتی تو چتی، ربات ساکت بمونه</div>
+      </div>
+      <div id="t-pause_enabled" class="toggle" onclick="toggleSetting('pause_enabled')"></div>
+    </div>
+
+    <div class="glass-strong rounded-2xl p-4 mb-3 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="font-bold text-sm">مدت Pause</div>
+          <div class="text-xs text-gray-400">بعد از آخرین پیام تو</div>
+        </div>
+        <div id="v-pause_duration" class="text-purple-400 font-bold">-</div>
+      </div>
+      <input type="range" id="s-pause_duration" min="5" max="120" step="5" onchange="updateSlider('pause_duration', this.value)" oninput="document.getElementById('v-pause_duration').textContent = this.value + ' دقیقه'">
+    </div>
+
+    <div class="glass-strong rounded-2xl p-4 mb-3 flex items-center justify-between card-hover">
+      <div>
+        <div class="font-bold text-sm">فرستادن ویس</div>
+        <div class="text-xs text-gray-400">جواب با ویس هم بره</div>
+      </div>
+      <div id="t-voice_output" class="toggle" onclick="toggleSetting('voice_output')"></div>
+    </div>
+
+    <div class="glass-strong rounded-2xl p-4 mb-3 flex items-center justify-between card-hover">
+      <div>
+        <div class="font-bold text-sm">خوندن ویس ورودی</div>
+        <div class="text-xs text-gray-400">ویس‌های کاربران خونده بشه</div>
+      </div>
+      <div id="t-voice_input" class="toggle" onclick="toggleSetting('voice_input')"></div>
+    </div>
+
+    <div class="glass-strong rounded-2xl p-4 mb-3 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="font-bold text-sm">تأخیر آلارم</div>
+          <div class="text-xs text-gray-400">ثانیه بین پیام و آلارم</div>
+        </div>
+        <div id="v-alert_delay" class="text-purple-400 font-bold">-</div>
+      </div>
+      <input type="range" id="s-alert_delay" min="5" max="60" step="1" onchange="updateSlider('alert_delay', this.value)" oninput="document.getElementById('v-alert_delay').textContent = this.value + ' ثانیه'">
+    </div>
+
+    <div class="glass-strong rounded-2xl p-4 mb-3 card-hover">
+      <div class="flex items-center justify-between mb-3">
+        <div>
+          <div class="font-bold text-sm">حداکثر زمان تلاش</div>
+          <div class="text-xs text-gray-400">تا کی retry کنه</div>
+        </div>
+        <div id="v-max_retry_time" class="text-purple-400 font-bold">-</div>
+      </div>
+      <input type="range" id="s-max_retry_time" min="60" max="600" step="30" onchange="updateSlider('max_retry_time', this.value)" oninput="document.getElementById('v-max_retry_time').textContent = this.value + ' ثانیه'">
+    </div>
+
+    <div class="glass-strong rounded-2xl p-4 mb-3 card-hover">
+      <div class="mb-3">
+        <div class="font-bold text-sm">جنسیت صدای ویس</div>
+        <div class="text-xs text-gray-400">صدای جواب‌های صوتی</div>
+      </div>
+      <div class="grid grid-cols-2 gap-2">
+        <button onclick="setVoice('fa-IR-FaridNeural')" id="vm-Farid" class="btn-ghost">مرد 👨</button>
+        <button onclick="setVoice('fa-IR-DilaraNeural')" id="vm-Dilara" class="btn-ghost">زن 👩</button>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Paused Page -->
+  <div id="page-paused" class="page px-4 pt-6">
+    <h1 class="text-2xl font-bold mb-1">چت‌های Pause شده</h1>
+    <p class="text-gray-400 text-sm mb-6">چت‌هایی که ربات ساکته</p>
+    <div id="pausedList" class="space-y-3">
+      <div class="text-center text-gray-500 py-8">در حال بارگذاری...</div>
+    </div>
+  </div>
+
+  <!-- Facts Page -->
+  <div id="page-facts" class="page px-4 pt-6">
+    <h1 class="text-2xl font-bold mb-1">حافظه ربات</h1>
+    <p class="text-gray-400 text-sm mb-6">فکت‌ها و یادداشت‌ها</p>
+
+    <div class="glass-strong rounded-2xl p-4 mb-4">
+      <div class="font-bold text-sm mb-3">افزودن فکت جدید</div>
+      <input id="factKey" class="login-input mb-2" placeholder="کلید (انگلیسی)" style="text-align:right;" />
+      <input id="factValue" class="login-input mb-3" placeholder="مقدار (فارسی مجاز)" style="text-align:right;" />
+      <button onclick="addFact()" class="btn-primary"><span>➕ اضافه کن</span></button>
+    </div>
+
+    <div id="factsList" class="space-y-2"></div>
+  </div>
+
+  <!-- Logs Page -->
+  <div id="page-logs" class="page px-4 pt-6">
+    <h1 class="text-2xl font-bold mb-1">لاگ زنده</h1>
+    <p class="text-gray-400 text-sm mb-6">آخرین رویدادها</p>
+    <div id="logsList" class="glass-strong rounded-2xl p-4 max-h-96 overflow-y-auto">
+      <div class="text-center text-gray-500 py-8">در حال بارگذاری...</div>
+    </div>
+  </div>
+
+</div>
+
+<!-- Tab Bar -->
+<div id="tabBar" class="hidden fixed bottom-0 left-0 right-0 glass-strong z-50 px-2 py-3" style="border-radius: 24px 24px 0 0;">
+  <div class="flex justify-around">
+    <button onclick="showPage('dashboard')" class="tab-item active flex flex-col items-center gap-1 px-3 py-1 text-xs text-gray-400">
+      <i data-lucide="home" class="w-5 h-5"></i>
+      <span>خانه</span>
+    </button>
+    <button onclick="showPage('settings')" class="tab-item flex flex-col items-center gap-1 px-3 py-1 text-xs text-gray-400">
+      <i data-lucide="settings" class="w-5 h-5"></i>
+      <span>تنظیمات</span>
+    </button>
+    <button onclick="showPage('paused')" class="tab-item flex flex-col items-center gap-1 px-3 py-1 text-xs text-gray-400">
+      <i data-lucide="pause-circle" class="w-5 h-5"></i>
+      <span>Pause</span>
+    </button>
+    <button onclick="showPage('facts')" class="tab-item flex flex-col items-center gap-1 px-3 py-1 text-xs text-gray-400">
+      <i data-lucide="brain" class="w-5 h-5"></i>
+      <span>حافظه</span>
+    </button>
+    <button onclick="showPage('logs')" class="tab-item flex flex-col items-center gap-1 px-3 py-1 text-xs text-gray-400">
+      <i data-lucide="list" class="w-5 h-5"></i>
+      <span>لاگ</span>
+    </button>
+  </div>
+</div>
+
+<script>
+const API_BASE = "https://telegram-ai-assistant-production-7c70.up.railway.app";
+const API_KEY_STORAGE = "poryia_api_key";
+
+let API_KEY = localStorage.getItem(API_KEY_STORAGE) || "";
+let currentPage = "dashboard";
+let refreshInterval = null;
+
+// ============ Utility ============
+function toast(msg, type = "success") {
+  const el = document.getElementById("toast");
+  el.textContent = msg;
+  el.className = "toast show " + type;
+  setTimeout(() => el.className = "toast " + type, 2500);
+}
+
+function timeAgo(seconds) {
+  if (seconds < 60) return seconds + "s";
+  if (seconds < 3600) return Math.floor(seconds / 60) + "m";
+  if (seconds < 86400) return Math.floor(seconds / 3600) + "h " + Math.floor((seconds % 3600) / 60) + "m";
+  return Math.floor(seconds / 86400) + "d";
+}
+
+async function api(path, method = "GET", body = null) {
+  const opts = {
+    method,
+    headers: {
+      "X-API-Key": API_KEY,
+      "Content-Type": "application/json",
+    },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  try {
+    const res = await fetch(API_BASE + path, opts);
+    if (res.status === 401) {
+      toast("کلید API اشتباهه", "error");
+      logout();
+      return null;
+    }
+    return await res.json();
+  } catch (e) {
+    toast("اتصال برقرار نشد", "error");
+    return null;
+  }
+}
+
+// ============ Auth ============
+function login() {
+  const key = document.getElementById("apiKeyInput").value.trim();
+  if (!key) {
+    toast("کلید API رو وارد کن", "error");
+    return;
+  }
+  API_KEY = key;
+  localStorage.setItem(API_KEY_STORAGE, key);
+  checkAuth();
+}
+
+function logout() {
+  API_KEY = "";
+  localStorage.removeItem(API_KEY_STORAGE);
+  document.getElementById("mainApp").classList.add("hidden");
+  document.getElementById("tabBar").classList.add("hidden");
+  document.getElementById("loginScreen").classList.remove("hidden");
+  if (refreshInterval) clearInterval(refreshInterval);
+}
+
+async function checkAuth() {
+  const data = await api("/api/status");
+  if (!data || data.error) {
+    return;
+  }
+  document.getElementById("loginScreen").classList.add("hidden");
+  document.getElementById("mainApp").classList.remove("hidden");
+  document.getElementById("tabBar").classList.remove("hidden");
+  updateDashboard(data);
+  refreshInterval = setInterval(() => {
+    if (currentPage === "dashboard") refreshAll();
+  }, 10000);
+}
+
+// ============ Navigation ============
+function showPage(name) {
+  document.querySelectorAll(".page").forEach(p => p.classList.remove("active"));
+  document.getElementById("page-" + name).classList.add("active");
+  document.querySelectorAll(".tab-item").forEach(t => t.classList.remove("active"));
+  event.currentTarget.classList.add("active");
+  currentPage = name;
+
+  if (name === "paused") loadPaused();
+  else if (name === "facts") loadFacts();
+  else if (name === "logs") loadLogs();
+  else if (name === "settings") loadSettings();
+  else if (name === "dashboard") refreshAll();
+
+  if (window.lucide) lucide.createIcons();
+}
+
+// ============ Dashboard ============
+function updateDashboard(data) {
+  if (!data.online) {
+    document.getElementById("headerDot").classList.add("offline");
+    document.getElementById("headerStatus").textContent = "آفلاین";
+    document.getElementById("botStatus").textContent = "❌ آفلاین";
+    return;
+  }
+  document.getElementById("headerDot").classList.remove("offline");
+  document.getElementById("headerStatus").textContent = "آنلاین";
+  document.getElementById("botStatus").textContent = "✅ فعال - " + (data.first_name || "کاربر");
+  document.getElementById("statUptime").textContent = timeAgo(data.uptime_seconds);
+  document.getElementById("statFacts").textContent = data.facts_count;
+  document.getElementById("statPaused").textContent = data.paused_chats_count;
+  document.getElementById("statVoice").textContent = data.voice_prefs_count;
+}
+
+async function refreshAll() {
+  const data = await api("/api/status");
+  if (data && !data.error) updateDashboard(data);
+}
+
+async function resumeAll() {
+  if (!confirm("همه چت‌های pause آزاد بشن؟")) return;
+  const res = await api("/api/resume_all", "POST");
+  if (res && res.ok) {
+    toast("همه آزاد شدن ✅");
+    refreshAll();
+  }
+}
+
+// ============ Settings ============
+async function loadSettings() {
+  const data = await api("/api/settings");
+  if (!data || !data.settings) return;
+  const s = data.settings;
+
+  ["pause_enabled", "voice_output", "voice_input"].forEach(k => {
+    const el = document.getElementById("t-" + k);
+    if (el) el.classList.toggle("on", !!s[k]);
+  });
+
+  document.getElementById("s-pause_duration").value = Math.floor(s.pause_duration / 60);
+  document.getElementById("v-pause_duration").textContent = Math.floor(s.pause_duration / 60) + " دقیقه";
+
+  document.getElementById("s-alert_delay").value = s.alert_delay;
+  document.getElementById("v-alert_delay").textContent = s.alert_delay + " ثانیه";
+
+  document.getElementById("s-max_retry_time").value = s.max_retry_time;
+  document.getElementById("v-max_retry_time").textContent = s.max_retry_time + " ثانیه";
+
+  updateVoiceButtons(s.voice_name);
+}
+
+function updateVoiceButtons(voice) {
+  document.getElementById("vm-Farid").classList.toggle("btn-primary", voice === "fa-IR-FaridNeural");
+  document.getElementById("vm-Farid").classList.toggle("btn-ghost", voice !== "fa-IR-FaridNeural");
+  document.getElementById("vm-Dilara").classList.toggle("btn-primary", voice === "fa-IR-DilaraNeural");
+  document.getElementById("vm-Dilara").classList.toggle("btn-ghost", voice !== "fa-IR-DilaraNeural");
+}
+
+async function toggleSetting(key) {
+  const el = document.getElementById("t-" + key);
+  const newVal = !el.classList.contains("on");
+  el.classList.toggle("on", newVal);
+
+  const payload = {};
+  payload[key] = newVal;
+  const res = await api("/api/settings", "POST", payload);
+  if (res && res.ok) {
+    toast("ذخیره شد ✅");
+  } else {
+    el.classList.toggle("on", !newVal);
+    toast("خطا در ذخیره", "error");
+  }
+}
+
+async function updateSlider(key, value) {
+  const v = parseInt(value);
+  const payload = {};
+  if (key === "pause_duration") payload[key] = v * 60;
+  else payload[key] = v;
+
+  const res = await api("/api/settings", "POST", payload);
+  if (res && res.ok) toast("ذخیره شد ✅");
+  else toast("خطا", "error");
+}
+
+async function setVoice(voice) {
+  const res = await api("/api/settings", "POST", { voice_name: voice });
+  if (res && res.ok) {
+    toast("صدا تغییر کرد ✅");
+    updateVoiceButtons(voice);
+  }
+}
+
+// ============ Paused ============
+async function loadPaused() {
+  const data = await api("/api/paused");
+  const list = document.getElementById("pausedList");
+  if (!data || !data.paused) {
+    list.innerHTML = '<div class="text-center text-gray-500 py-8">خطا در بارگذاری</div>';
+    return;
+  }
+  if (data.paused.length === 0) {
+    list.innerHTML = '<div class="text-center text-gray-500 py-8">هیچ چتی pause نیست ✨</div>';
+    return;
+  }
+  list.innerHTML = data.paused.map(p => `
+    <div class="glass-strong rounded-2xl p-4 flex items-center justify-between card-hover">
+      <div>
+        <div class="font-bold text-sm">${p.name || "کاربر " + p.chat_id}</div>
+        <div class="text-xs text-gray-400 mt-1">باقی‌مونده: ${timeAgo(p.remaining_seconds)}</div>
+      </div>
+      <button onclick="resumeChat(${p.chat_id})" class="btn-ghost text-xs">▶️ Resume</button>
+    </div>
+  `).join("");
+}
+
+async function resumeChat(chatId) {
+  const res = await api("/api/resume", "POST", { chat_id: chatId });
+  if (res && res.ok) {
+    toast("آزاد شد ✅");
+    loadPaused();
+  }
+}
+
+// ============ Facts ============
+async function loadFacts() {
+  const data = await api("/api/facts");
+  const list = document.getElementById("factsList");
+  if (!data || !data.facts) {
+    list.innerHTML = '<div class="text-center text-gray-500 py-8">خطا</div>';
+    return;
+  }
+  const entries = Object.entries(data.facts);
+  if (entries.length === 0) {
+    list.innerHTML = '<div class="text-center text-gray-500 py-8">هنوز فکتی یاد نگرفتم</div>';
+    return;
+  }
+  list.innerHTML = entries.map(([k, v]) => `
+    <div class="glass-strong rounded-2xl p-4 card-hover">
+      <div class="flex items-start justify-between gap-3">
+        <div class="flex-1">
+          <div class="font-bold text-xs text-purple-400 mb-1" style="direction:ltr;text-align:left;">${k}</div>
+          <div class="text-sm text-gray-200">${v}</div>
+        </div>
+        <button onclick="deleteFact('${k.replace(/'/g, "\\'")}')" class="btn-ghost text-xs text-red-400">🗑️</button>
+      </div>
+    </div>
+  `).join("");
+}
+
+async function addFact() {
+  const key = document.getElementById("factKey").value.trim();
+  const value = document.getElementById("factValue").value.trim();
+  if (!key || !value) {
+    toast("کلید و مقدار لازمه", "error");
+    return;
+  }
+  const res = await api("/api/facts/add", "POST", { key, value });
+  if (res && res.ok) {
+    toast("اضافه شد ✅");
+    document.getElementById("factKey").value = "";
+    document.getElementById("factValue").value = "";
+    loadFacts();
+  }
+}
+
+async function deleteFact(key) {
+  if (!confirm("فکت «" + key + "» حذف بشه؟")) return;
+  const res = await api("/api/facts/delete", "POST", { key });
+  if (res && res.ok) {
+    toast("حذف شد ✅");
+    loadFacts();
+  }
+}
+
+// ============ Logs ============
+async function loadLogs() {
+  const data = await api("/api/logs");
+  const list = document.getElementById("logsList");
+  if (!data || !data.logs) {
+    list.innerHTML = '<div class="text-center text-gray-500 py-8">خطا</div>';
+    return;
+  }
+  if (data.logs.length === 0) {
+    list.innerHTML = '<div class="text-center text-gray-500 py-8">لاگی نیست</div>';
+    return;
+  }
+  list.innerHTML = data.logs.slice().reverse().map(l => `
+    <div class="log-entry">
+      <div class="text-xs text-gray-500">${l.time}</div>
+      <div class="text-gray-200">${l.text}</div>
+    </div>
+  `).join("");
+}
+
+// ============ Boot ============
+window.addEventListener("load", () => {
+  if (window.lucide) lucide.createIcons();
+  setTimeout(() => {
+    document.getElementById("splash").style.opacity = "0";
+    setTimeout(() => document.getElementById("splash").remove(), 500);
+  }, 800);
+
+  if (API_KEY) {
+    checkAuth();
+  } else {
+    document.getElementById("loginScreen").classList.remove("hidden");
+  }
+});
+</script>
+
+</body>
+</html>
