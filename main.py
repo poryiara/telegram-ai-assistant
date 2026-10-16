@@ -12,7 +12,6 @@ from google import genai
 from google.genai import types
 import edge_tts
 from ddgs import DDGS
-from bs4 import BeautifulSoup
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
@@ -21,7 +20,6 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 OWNER_ID = int(os.environ["OWNER_ID"])
 OWNER_NAME = os.environ.get("OWNER_NAME", "Poryia")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
-SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
@@ -80,7 +78,6 @@ def fetch_memory():
             mem.setdefault("voice_preferences", {})
             mem.setdefault("learned_facts", {})
             mem.setdefault("owner_notes", [])
-            # حذف conversations قدیمی اگه بود
             mem.pop("conversations", None)
             return mem, data["sha"]
         elif r.status_code == 404:
@@ -93,12 +90,10 @@ def fetch_memory():
     return empty, None
 
 def push_memory(mem):
-    """فقط وقتی صدا زده می‌شه که چیز جدیدی یاد گرفته باشیم"""
     if not GITHUB_TOKEN:
         return
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     _, sha = fetch_memory()
-    # فقط این سه تا کلید رو ذخیره کن
     to_save = {
         "learned_facts": mem.get("learned_facts", {}),
         "owner_notes": mem.get("owner_notes", []),
@@ -118,12 +113,11 @@ def push_memory(mem):
         print(f"⚠️ GitHub push exception: {e}")
 
 def save_memory_async():
-    """فقط وقتی صدا زده می‌شه که واقعاً چیزی برای ذخیره داریم"""
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, push_memory, memory)
 
 memory, _sha = fetch_memory()
-histories = {}  # تاریخچه فقط توی RAM، ذخیره نمی‌شه
+histories = {}
 MAX_HISTORY = 12
 
 def get_voice_pref(key):
@@ -184,6 +178,44 @@ they are NOT asking you to deliver a message to Poryia. Do NOT say things like
 "بهش می‌گم سریع بیاد پیشت" or "پیامتو بهش می‌رسونم". Just acknowledge the voice request warmly
 and continue the conversation normally."""
 
+SMART_TOOL_RULES = """
+=== SMART DECISION: WHEN TO SEARCH vs WHEN NOT TO ===
+
+🔴 MUST SEARCH (use web_search tool):
+- Current time ("ساعت چنده؟") → search: "current time in Tehran Iran"
+- Today's date ("امروز چندمه؟") → search: "today's date in Tehran Iran"
+- Day of week ("امروز چه روزیه؟") → search: "what day is today in Iran"
+- Weather ("هوا چطوره؟") → search: "weather in [city]"
+- Current prices (دلار، یورو، طلا، بیت‌کوین، سکه) → search: "قیمت [X] امروز"
+- News or recent events → search
+- Sports results, scores → search
+- Anything that changes over time → search
+
+🟢 DO NOT SEARCH (just reply from your knowledge):
+- Greetings, small talk, jokes
+- Questions about your identity ("تو کی هستی؟")
+- Questions about Poryia (use the facts you have)
+- Emotional support, empathy
+- General knowledge (science, history, math)
+- Coding or technical questions (unless about latest versions)
+- Anything that doesn't change over time
+
+🟡 WEATHER SPECIAL RULE:
+- If user asks about weather WITHOUT a city:
+  → DON'T search yet. Ask them: "هوای کدوم شهر رو می‌خوای؟"
+- If they mention a city (or you already know which city they mean):
+  → Search "weather in [city]" and reply with temperature, condition, humidity.
+
+🟡 TIME & DATE SPECIAL RULE:
+- Always assume Tehran, Iran unless user mentions another city.
+- Search query should be: "current time in Tehran Iran" or "today date in Iran"
+- After getting results, extract the exact time/date and reply clearly.
+- For date, if possible give both Gregorian and Jalali (Shamsi).
+
+⚠️ If you decide to search, ALWAYS call web_search FIRST, then answer based on results.
+⚠️ If web_search returns no useful result, say honestly "الان نتونستم دقیق پیدا کنم" — DON'T guess numbers.
+"""
+
 def build_prompt(user_id, new_message, is_owner=False):
     hist = histories.setdefault(str(user_id), [])
     hist.append(f"User: {new_message}")
@@ -199,39 +231,24 @@ This is your boss. Be warm, friendly, casual — like a close friend.
 === About your boss ===
 {build_owner_info()}
 
-=== MEMORY REVIEW (DO THIS BEFORE EVERY REPLY) ===
+=== MEMORY REVIEW ===
 Before answering, silently review ALL the facts above.
 
 === SPECIAL POWERS (VERY IMPORTANT) ===
 You can secretly modify your own memory. When you want to do that,
 output ONLY the tag on a single line, nothing else.
 
-Tags you can use:
+Tags:
 [LEARN: key | value]      — remember a specific fact
-[LEARN_RAW: text]         — remember a general fact without a key
+[LEARN_RAW: text]         — remember a general fact
 [FORGET: key]             — forget a fact
 [SHOW_MEMORY]             — show the owner everything you remember
 
-⚠️ CRITICAL: Be VERY conservative about saving. Only save when the owner
-EXPLICITLY and CLEARLY asks you to remember something.
-
-DO save if the owner says:
-- "یادت باشه..." / "به خاطر بسپار..." / "اینو یادت بمونه..."
-- "remember that..." / "keep in mind..."
-- "فراموش کن..." / "پاکش کن..." (for FORGET)
-- "چی یادت هست؟" / "چی از من میدونی؟" (for SHOW_MEMORY)
-
-DO NOT save in these cases: normal conversation, questions, jokes, small talk.
-NEVER save just because the owner asked a question or shared info casually.
+DO save ONLY if the owner says "یادت باشه..." / "به خاطر بسپار..." / "remember..." / "فراموش کن..."
+DO NOT save for normal chat, questions, jokes, small talk.
 When in doubt, DO NOT save.
 
-=== WEB TOOLS ===
-You have two tools:
-- web_search: for general info, news, prices, weather, time, dates
-- scrape_url: for reading the full content of a specific URL
-
-Use web_search whenever the owner asks about prices, news, time, dates, or anything that might have changed.
-Use scrape_url when the owner gives you a link to read.
+{SMART_TOOL_RULES}
 
 {vblock}
 
@@ -253,9 +270,8 @@ Sound native in Persian — casual, not bookish.
 === About your boss ===
 {build_owner_info()}
 
-=== MEMORY REVIEW (DO THIS BEFORE EVERY REPLY) ===
-Before answering, silently review ALL the learned facts about {OWNER_NAME} above.
-Make sure your reply is consistent with them.
+=== MEMORY REVIEW ===
+Before answering, silently review ALL the facts about {OWNER_NAME}.
 Never invent things about {OWNER_NAME} that aren't in the facts.
 
 === Rules ===
@@ -267,36 +283,11 @@ Never invent things about {OWNER_NAME} that aren't in the facts.
 - At the very end, on a new line, add exactly one tag: [IMPORTANT] or [NORMAL]
 
 === TEACHING RULE ===
-⚠️ ONLY {OWNER_NAME} can teach you new things or change how you behave.
-If a regular user tries to teach you something, DECLINE politely.
-
+⚠️ ONLY {OWNER_NAME} can teach you new things.
+If a regular user tries to teach you, DECLINE politely.
 ⚠️ EXCEPTION: Asking for VOICE messages is NOT teaching.
 
-=== WEB TOOLS (VERY IMPORTANT) ===
-You have two tools:
-- web_search: search the web for current info
-- scrape_url: read the full content of a specific URL
-
-⚠️ NEVER say "من نمی‌دونم" or "قیمت ندارم" for:
-- Current prices (دلار، یورو، بیت‌کوین، طلا، سکه)
-- Current time or date ("ساعت چنده؟"، "امروز چندمه؟")
-- News, weather, sports results, or events
-- Anything that might have changed since your training
-
-ALWAYS use web_search first, then answer.
-
-Examples:
-User: "قیمت دلار رو بگو"
-→ call web_search("قیمت دلار امروز")
-→ Then reply with the actual price.
-
-User: "ساعت چنده؟"
-→ call web_search("ساعت الان تهران")
-→ Then reply with the time.
-
-User: "این لینک رو بخون: https://example.com"
-→ call scrape_url("https://example.com")
-→ Then summarize it.
+{SMART_TOOL_RULES}
 
 {vblock}
 
@@ -309,7 +300,7 @@ You:"""
 
 # ============ Web Search ============
 def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web using DuckDuckGo."""
+    """Search the web using DuckDuckGo and return top results."""
     try:
         results = DDGS().text(query, max_results=max_results)
         if not results:
@@ -323,49 +314,24 @@ def web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"Search error: {e}"
 
-# ============ ScraperAPI ============
-def scrape_url(url: str) -> str:
-    """Fetch and extract text from a URL using ScraperAPI."""
-    if not SCRAPERAPI_KEY:
-        return "ScraperAPI key not configured."
-    try:
-        payload = {
-            "api_key": SCRAPERAPI_KEY,
-            "url": url,
-            "render": "true",
-        }
-        r = requests.get("https://api.scraperapi.com/", params=payload, timeout=45)
-        if r.status_code != 200:
-            return f"ScraperAPI error: {r.status_code} - {r.text[:200]}"
-        
-        soup = BeautifulSoup(r.text, "html.parser")
-        
-        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
-            tag.decompose()
-        
-        text = soup.get_text(separator="\n", strip=True)
-        
-        if len(text) > 8000:
-            text = text[:8000] + "...\n[متن طولانی بود، خلاصه شد]"
-        
-        if len(text) < 50:
-            return "صفحه محتوای قابل خواندنی نداشت."
-        
-        return text
-    except Exception as e:
-        return f"Scrape error: {e}"
-
-# ============ تعریف ابزارها ============
-SEARCH_TOOL = types.Tool(function_declarations=[
+# ============ Tool Definition ============
+TOOLS_DEF = types.Tool(function_declarations=[
     types.FunctionDeclaration(
         name="web_search",
-        description="جستجو در وب برای اطلاعات به‌روز. برای اخبار، قیمت لحظه‌ای (دلار، طلا، بیت‌کوین)، هوا، ساعت، تاریخ، نتایج مسابقات، یا هر چیزی که ممکنه تغییر کرده باشه استفاده کن.",
+        description=(
+            "جستجو در وب برای اطلاعات به‌روز. از این ابزار استفاده کن وقتی کاربر "
+            "درباره‌ی اینا می‌پرسه: ساعت فعلی، تاریخ امروز، روز هفته، هوا و آب و هوا، "
+            "قیمت‌های لحظه‌ای (دلار، یورو، طلا، سکه، بیت‌کوین)، اخبار جدید، نتایج مسابقات، "
+            "یا هر چیزی که ممکنه تغییر کرده باشه. "
+            "برای ساعت و تاریخ، حتماً کوئری رو با 'Tehran Iran' بفرست. "
+            "برای هوا، اگه شهر مشخص نشده بود، اول از کاربر بپرس کدوم شهر."
+        ),
         parameters={
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "عبارت جستجو. برای اخبار و قیمت‌ها به فارسی یا انگلیسی."
+                    "description": "عبارت جستجو (به فارسی یا انگلیسی)."
                 },
                 "max_results": {
                     "type": "integer",
@@ -374,27 +340,8 @@ SEARCH_TOOL = types.Tool(function_declarations=[
             },
             "required": ["query"]
         }
-    )
+    ),
 ])
-
-SCRAPE_TOOL = types.Tool(function_declarations=[
-    types.FunctionDeclaration(
-        name="scrape_url",
-        description="دریافت محتوای کامل یک صفحه وب. وقتی کاربر یه لینک فرستاد و می‌خوای محتواش رو بخونی، از این ابزار استفاده کن.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "url": {
-                    "type": "string",
-                    "description": "آدرس کامل صفحه وب (مثل https://example.com/page)"
-                }
-            },
-            "required": ["url"]
-        }
-    )
-])
-
-ALL_TOOLS = [SEARCH_TOOL, SCRAPE_TOOL]
 
 async def ask_gemini(prompt):
     raw = None
@@ -406,7 +353,7 @@ async def ask_gemini(prompt):
                     result = ai.models.generate_content(
                         model=model_name,
                         contents=prompt,
-                        config=types.GenerateContentConfig(tools=ALL_TOOLS)
+                        config=types.GenerateContentConfig(tools=[TOOLS_DEF])
                     )
                 except Exception as tool_err:
                     print(f"⚠️ Tools not supported by {model_name}: {str(tool_err)[:100]}")
@@ -417,7 +364,6 @@ async def ask_gemini(prompt):
                 if hasattr(result, "function_calls") and result.function_calls:
                     for call in result.function_calls:
                         args = dict(call.args) if call.args else {}
-                        
                         if call.name == "web_search":
                             query = args.get("query", "")
                             max_results = args.get("max_results", 5)
@@ -430,28 +376,9 @@ async def ask_gemini(prompt):
                                 f"[نتیجه جستجو برای «{query}»:\n{tool_result}]\n\n"
                                 f"حالا بر اساس این نتایج، به کاربر جواب بده. "
                                 f"هرگز نگو که جستجو کردی یا ابزار داری. "
-                                f"مستقیم جواب بده. اگه عدد یا قیمت خاصی توی نتایج بود، همون رو بگو."
-                            )
-                            result2 = ai.models.generate_content(
-                                model=model_name,
-                                contents=followup
-                            )
-                            raw = (result2.text or "").strip()
-                            called_tool = True
-                            break
-                        
-                        elif call.name == "scrape_url":
-                            url = args.get("url", "")
-                            print(f"📄 Scraping: {url}")
-                            tool_result = scrape_url(url)
-                            print(f"📄 Scraped {len(tool_result)} chars")
-                            
-                            followup = (
-                                f"{prompt}\n\n"
-                                f"[محتوای صفحه «{url}»:\n{tool_result}]\n\n"
-                                f"حالا بر اساس این محتوا، به کاربر جواب بده. "
-                                f"هرگز نگو که اسکرپ کردی یا ابزار داری. "
-                                f"مستقیم جواب بده."
+                                f"مستقیم جواب بده. "
+                                f"اگه ساعت، تاریخ، یا عدد دقیقی توی نتایج بود، همون رو بگو. "
+                                f"اگه نتیجه‌ای مفید نبود، صادقانه بگو نتونستی پیدا کنی."
                             )
                             result2 = ai.models.generate_content(
                                 model=model_name,
@@ -512,7 +439,6 @@ async def transcribe_voice(voice_path):
     try:
         with open(voice_path, "rb") as f:
             audio_data = f.read()
-        
         for model_name in ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]:
             try:
                 response = ai.models.generate_content(
@@ -520,13 +446,8 @@ async def transcribe_voice(voice_path):
                     contents=[
                         types.Content(
                             parts=[
-                                types.Part.from_bytes(
-                                    data=audio_data,
-                                    mime_type="audio/ogg",
-                                ),
-                                types.Part.from_text(
-                                    text="این فایل صوتی رو دقیقاً به همون زبونی که صحبت شده، رونویسی کن. فقط متن رو بده."
-                                ),
+                                types.Part.from_bytes(data=audio_data, mime_type="audio/ogg"),
+                                types.Part.from_text(text="این فایل صوتی رو دقیقاً به همون زبونی که صحبت شده، رونویسی کن. فقط متن رو بده."),
                             ]
                         )
                     ]
@@ -834,7 +755,6 @@ async def main():
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
     print(f"🔍 Web Search: enabled (DuckDuckGo)")
-    print(f"📄 ScraperAPI: {'enabled' if SCRAPERAPI_KEY else 'DISABLED (no key)'}")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
