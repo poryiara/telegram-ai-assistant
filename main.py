@@ -468,17 +468,22 @@ async def send_voice_reply(chat_id, reply_to_id, text):
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
-# ============ هندلر ادمین (Saved Messages) ============
+# ============ هندلر ادمین (فقط Saved Messages) ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_message(event):
-    if not event.is_private:
-        return
+    # فقط Saved Messages
     try:
         me = await client.get_me()
-        if event.sender_id != me.id:
-            return
     except Exception as e:
         print(f"⚠️ Owner check error: {e}")
+        return
+
+    # چت باید دقیقاً Saved Messages باشه
+    if event.chat_id != me.id:
+        return
+
+    # و باید خودت فرستاده باشی
+    if event.sender_id != me.id:
         return
 
     text = event.message.text or ""
@@ -672,6 +677,7 @@ async def main():
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice output: {VOICE_NAME}")
     print(f"🎙️ Voice input: enabled (Gemini STT)")
+    print(f"🛡️ Owner handler: Saved Messages only")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
