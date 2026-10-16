@@ -26,7 +26,6 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
-DEFAULT_CITY = os.environ.get("DEFAULT_CITY", "Tehran")
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
@@ -152,80 +151,305 @@ This user hasn't chosen yet about voice messages.
 → At the END of your reply, gently offer voice ONCE in a friendly way.
   Persian example: "راستی اگه راحت‌تری می‌تونم برات ویس هم بفرستم، فقط بگو 😊"
 → Don't be pushy. Only offer once.
-→ CRITICAL: If THIS message is a response to a previous voice offer:
-   - If they AGREE ("آره", "باشه", "اوکی", "بفرست", "yes", "ok"): output [ENABLE_VOICE] on its own line at the end.
-   - If they DECLINE ("نه", "نمیخوام", "no", "لازم نیست"): output [DISABLE_VOICE] on its own line at the end.
-→ Otherwise (no clear answer yet), output NEITHER voice tag.
+→ If THIS message is a response to a previous voice offer:
+   - AGREE ("آره", "باشه", "اوکی", "بفرست", "yes", "ok"): output [ENABLE_VOICE]
+   - DECLINE ("نه", "نمیخوام", "no", "لازم نیست"): output [DISABLE_VOICE]
+   - Otherwise: NO voice tag
 
-⚠️ IMPORTANT: When a user asks "برام ویس بفرست", they mean "send ME voice replies from now on" —
-they are NOT asking you to deliver a message to Poryia. Do NOT say things like
-"بهش می‌گم سریع بیاد پیشت" or "پیامتو بهش می‌رسونم". Just acknowledge warmly and continue chatting."""
+⚠️ When a user asks "برام ویس بفرست", they mean "send ME voice replies from now on" —
+NOT to deliver a message to Poryia. Just acknowledge warmly."""
 
     if pref is True:
         return """=== VOICE MESSAGES ===
-Voice is ON for this user. They agreed to receive voice messages.
-→ Reply normally. A voice version of your reply will be sent automatically.
-→ Do NOT mention voice or offer it again.
-→ EXCEPTION: If the user clearly says they don't want voice anymore
-   ("دیگه ویس نمیخوام", "stop voice", "متن بفرست", "text only"), output [DISABLE_VOICE] on its own line at the end.
-
-⚠️ IMPORTANT: Do NOT treat any voice-related message as a request to forward something to Poryia.
-Just reply normally."""
+Voice is ON for this user.
+→ Reply normally. Voice version will be sent automatically.
+→ Do NOT mention voice.
+→ If user says "دیگه ویس نمیخوام" / "stop voice" / "متن بفرست" → output [DISABLE_VOICE]"""
 
     return """=== VOICE MESSAGES ===
-Voice is OFF for this user. They declined previously.
+Voice is OFF for this user.
 → Text only. Do NOT offer voice again.
-→ EXCEPTION: If the user asks for voice ("برام ویس بفرست", "send voice", "ویس بفرست"), output [ENABLE_VOICE] on its own line at the end.
+→ If user asks for voice ("برام ویس بفرست", "send voice") → output [ENABLE_VOICE]
 
-⚠️ IMPORTANT: When a user asks "برام ویس بفرست", they mean "send ME voice replies from now on" —
-they are NOT asking you to deliver a message to Poryia. Do NOT say things like
-"بهش می‌گم سریع بیاد پیشت" or "پیامتو بهش می‌رسونم". Just acknowledge the voice request warmly
-and continue the conversation normally."""
+⚠️ When a user asks "برام ویس بفرست", they mean "send ME voice replies" —
+NOT to deliver a message to Poryia. Just acknowledge warmly."""
 
-SMART_TOOL_RULES = """
-=== SMART TOOL SELECTION (VERY IMPORTANT) ===
+# ============================================================
+#  TOOLS
+# ============================================================
 
-You have 4 tools. ALWAYS pick the RIGHT one:
+def get_current_time():
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        return now.strftime("ساعت %H:%M")
+    except Exception as e:
+        return f"Error: {e}"
 
-⏰ get_current_time → for "ساعت چنده؟", "what time is it?"
-   (This gives EXACT time in Tehran, always accurate)
+def get_current_date():
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        gregorian = now.strftime("%Y-%m-%d")
+        jalali = jdatetime.date.fromgregorian(date=now.date())
+        months = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
+        jalali_str = f"{jalali.day} {months[jalali.month - 1]} {jalali.year}"
+        return f"میلادی: {gregorian} | شمسی: {jalali_str}"
+    except Exception as e:
+        return f"Error: {e}"
 
-📅 get_current_date → for "امروز چندمه؟", "today's date", "تاریخ امروز"
-   (Gives EXACT date in both Gregorian and Jalali/Shamsi)
+def get_day_of_week():
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        days = {
+            "Saturday": "شنبه", "Sunday": "یکشنبه", "Monday": "دوشنبه",
+            "Tuesday": "سه‌شنبه", "Wednesday": "چهارشنبه",
+            "Thursday": "پنجشنبه", "Friday": "جمعه"
+        }
+        return days.get(now.strftime("%A"), now.strftime("%A"))
+    except Exception as e:
+        return f"Error: {e}"
 
-🌤️ get_weather → for "هوا چطوره؟", "آب و هوا", "weather"
-   - If user mentions a city → call with that city
-   - If user does NOT mention a city → first ASK "هوای کدوم شهر رو می‌خوای؟" (don't call the tool yet)
-   - Cities should be in English: Tehran, Mashhad, Isfahan, London, etc.
+# نگاشت شهرهای فارسی به انگلیسی
+CITY_MAP = {
+    "تهران": "Tehran", "مشهد": "Mashhad", "اصفهان": "Isfahan",
+    "شیراز": "Shiraz", "تبریز": "Tabriz", "کرج": "Karaj",
+    "اهواز": "Ahvaz", "قم": "Qom", "کرمانشاه": "Kermanshah",
+    "ارومیه": "Urmia", "زاهدان": "Zahedan", "رشت": "Rasht",
+    "یزد": "Yazd", "کرمان": "Kerman", "اردبیل": "Ardabil",
+    "بندرعباس": "Bandar Abbas", "اراک": "Arak", "زنجان": "Zanjan",
+    "سنندج": "Sanandaj", "قزوین": "Qazvin", "گرگان": "Gorgan",
+    "ساری": "Sari", "بوشهر": "Bushehr", "بیرجند": "Birjand",
+    "ایلام": "Ilam", "شهرکرد": "Shahrekord", "سمنان": "Semnan",
+    "یاسوج": "Yasuj", "بجنورد": "Bojnord",
+    "لندن": "London", "پاریس": "Paris", "برلین": "Berlin",
+    "توکیو": "Tokyo", "مسکو": "Moscow", "استانبول": "Istanbul",
+    "دبی": "Dubai", "نیویورک": "New York", "لس آنجلس": "Los Angeles",
+    "تورنتو": "Toronto", "سیدنی": "Sydney",
+}
 
-💰 get_currency_price → for "قیمت دلار چنده؟", "قیمت طلا", "قیمت بیت‌کوین"
-   - For دلار: currency="dollar"
-   - For یورو: currency="euro"
-   - For طلا (18 عیار): currency="gold"
-   - For سکه: currency="coin"
-   - For بیت‌کوین: currency="bitcoin"
-   - For تتر: currency="tether"
+def extract_city(text):
+    """استخراج نام شهر از متن"""
+    for fa, en in CITY_MAP.items():
+        if fa in text:
+            return en, fa
+    # اگه شهر انگلیسی بود
+    for city in ["Tehran", "Mashhad", "Isfahan", "Shiraz", "London", "Paris", "Dubai", "Istanbul"]:
+        if city.lower() in text.lower():
+            return city, city
+    return None, None
 
-🔍 web_search → for EVERYTHING ELSE that needs current info:
-   - News ("اخبار جدید", "آخرین خبرها")
-   - Sports results ("نتیجه بازی", "نتایج مسابقات")
-   - Any other time-sensitive factual info
+def get_weather(city_en: str, city_fa: str = None):
+    try:
+        r = requests.get(
+            f"https://wttr.in/{city_en}?format=j1",
+            timeout=15,
+            headers={"User-Agent": "curl/8.0"}
+        )
+        if r.status_code != 200:
+            return f"خطا در دریافت هوا (کد {r.status_code})"
+        data = r.json()
+        current = data["current_condition"][0]
+        temp = current["temp_C"]
+        feels = current["FeelsLikeC"]
+        desc = current["weatherDesc"][0]["value"]
+        humidity = current["humidity"]
+        wind = current["windspeedKmph"]
+        name = city_fa or city_en
+        return f"هوای {name}: {desc}، دما {temp}°C (احساس {feels}°C)، رطوبت {humidity}%، باد {wind} km/h"
+    except Exception as e:
+        return f"خطای هوا: {e}"
 
-🟢 NO TOOL NEEDED (just reply from your knowledge):
-   - Greetings, small talk, jokes
-   - "تو کی هستی؟" / "اسمت چیه؟" → answer warmly
-   - Questions about Poryia → use the facts you have
-   - Emotional support, empathy
-   - General knowledge (science, history, math, geography like "پایتخت فرانسه")
-   - Coding, technical, or conceptual questions
+def get_currency_price(currency: str = "dollar"):
+    """قیمت بازار آزاد ایران از tgju.org"""
+    try:
+        currency_map = {
+            "dollar": ("price_dollar_rl", "دلار"),
+            "euro": ("price_eur", "یورو"),
+            "gold": ("geram18", "طلای ۱۸ عیار (هر گرم)"),
+            "coin": ("sekeb", "سکه امامی"),
+            "bitcoin": ("crypto-bitcoin", "بیت‌کوین"),
+            "tether": ("crypto-usdt", "تتر"),
+        }
+        key, name_fa = currency_map.get(currency.lower(), ("price_dollar_rl", "دلار"))
 
-⚠️ CRITICAL RULES:
-1. NEVER use web_search for time, date, weather, or currency — use the specific tools.
-2. NEVER make up numbers. If a tool returns an error, say honestly "الان نتونستم بگیرم".
-3. For weather without a city → ASK FIRST, don't guess.
-4. For currency, ALWAYS use get_currency_price (not web_search).
-5. After calling a tool, ALWAYS include the exact numbers from the result in your reply.
-"""
+        # روش 1: tgju.org ajax API
+        try:
+            r = requests.get(
+                "https://call1.tgju.org/ajax.json",
+                timeout=10,
+                headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+            )
+            if r.status_code == 200:
+                data = r.json()
+                current = data.get("current", {})
+                if key in current:
+                    item = current[key]
+                    price = item.get("p", "?")
+                    change = item.get("d", "")
+                    direction = item.get("dp", "")
+                    result = f"{name_fa}: {price} تومان"
+                    if change and change != "0":
+                        arrow = "▲" if str(direction) == "1" else "▼"
+                        result += f" ({arrow} {change})"
+                    return result
+        except Exception as e:
+            print(f"tgju ajax error: {e}")
+
+        # روش 2: tgju.org indi endpoint
+        try:
+            r = requests.get(
+                f"https://api.tgju.org/v1/market/indicator/summary-table-data/{key}",
+                timeout=10,
+                headers={"User-Agent": "Mozilla/5.0"}
+            )
+            if r.status_code == 200:
+                data = r.json()
+                if data and "data" in data and data["data"]:
+                    price = data["data"][0][1] if len(data["data"][0]) > 1 else "?"
+                    return f"{name_fa}: {price} تومان"
+        except Exception as e:
+            print(f"tgju indi error: {e}")
+
+        return f"الان نتونستم قیمت {name_fa} رو بگیرم"
+    except Exception as e:
+        return f"خطای ارز: {e}"
+
+def web_search(query: str, max_results: int = 5) -> str:
+    try:
+        results = DDGS().text(query, max_results=max_results)
+        if not results:
+            return "No results found."
+        summary = ""
+        for i, r in enumerate(results, 1):
+            summary += f"{i}. {r.get('title', 'No title')}\n"
+            summary += f"   {r.get('body', 'No description')}\n"
+            summary += f"   Link: {r.get('href', 'No link')}\n\n"
+        return summary
+    except Exception as e:
+        return f"Search error: {e}"
+
+# ============================================================
+#  INTENT DETECTION (تشخیص خودکار)
+# ============================================================
+
+def detect_intent(text: str):
+    """تشخیص میده کاربر چی می‌خواد. اگه مطمئن بودیم، مستقیم ابزار رو صدا می‌زنیم."""
+    t = text.strip().lower()
+
+    # ساعت
+    if re.search(r'(ساعت\s*(چند|چنده|چند شد|الان)|what\s*time|current\s*time)', t):
+        return "time"
+
+    # تاریخ
+    if re.search(r'(امروز\s*(چندم|چندمه|چند|چه تاریخ)|تاریخ\s*(امروز|چیست)|today.?s?\s*date|چه\s*تاریخی)', t):
+        return "date"
+
+    # روز هفته
+    if re.search(r'(چه\s*روزی|چه\s*روزیه|روز\s*هفته|what\s*day)', t):
+        return "day"
+
+    # هوا / آب و هوا
+    if re.search(r'(هوا|آب\s*و\s*هوا|وضعیت\s*هوا|weather|دما)', t):
+        return "weather"
+
+    # قیمت ارز / طلا / بیت‌کوین
+    if re.search(r'(قیمت|نرخ|چند\s*هست|چنده)', t) and re.search(r'(دلار|یورو|طلا|سکه|بیت|بیت‌کوین|تتر|usdt)', t):
+        # تشخیص نوع ارز
+        if re.search(r'دلار', t): return "currency:dollar"
+        if re.search(r'یورو', t): return "currency:euro"
+        if re.search(r'طلا', t): return "currency:gold"
+        if re.search(r'سکه', t): return "currency:coin"
+        if re.search(r'بیت', t): return "currency:bitcoin"
+        if re.search(r'تتر|usdt', t): return "currency:tether"
+
+    return None
+
+
+async def call_gemini_simple(prompt):
+    """فراخوانی ساده Gemini بدون ابزار"""
+    for attempt in range(2):
+        for model_name in MODELS:
+            try:
+                result = ai.models.generate_content(model=model_name, contents=prompt)
+                raw = (result.text or "").strip()
+                if raw:
+                    print(f"✅ Simple response from {model_name}")
+                    return raw
+            except Exception as e:
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    continue
+                elif "503" in err_str or "UNAVAILABLE" in err_str:
+                    continue
+                else:
+                    print(f"❌ Simple error with {model_name}: {err_str[:150]}")
+                continue
+        if attempt == 0:
+            await asyncio.sleep(3)
+    return None
+
+
+async def handle_with_tool(text, user_key, is_owner=False):
+    """تشخیص intent، صدا زدن ابزار، و بازنویسی جواب با شخصیت AI"""
+    intent = detect_intent(text)
+    if not intent:
+        return None
+
+    # --- ساعت ---
+    if intent == "time":
+        tool_result = get_current_time()
+        print(f"⏰ Time tool: {tool_result}")
+        persona = "You are Poryia's warm AI assistant. Reply in Persian, casual, 1 short sentence, include the exact time from the tool result."
+        prompt = f"{persona}\n\nTool result: {tool_result}\nUser asked: {text}\n\nReply:"
+        reply = await call_gemini_simple(prompt)
+        return reply or f"{tool_result}"
+
+    # --- تاریخ ---
+    if intent == "date":
+        tool_result = get_current_date()
+        print(f"📅 Date tool: {tool_result}")
+        persona = "You are Poryia's warm AI assistant. Reply in Persian, casual, 1 short sentence, include BOTH Gregorian and Jalali dates from the tool result."
+        prompt = f"{persona}\n\nTool result: {tool_result}\nUser asked: {text}\n\nReply:"
+        reply = await call_gemini_simple(prompt)
+        return reply or f"امروز {tool_result}"
+
+    # --- روز هفته ---
+    if intent == "day":
+        tool_result = get_day_of_week()
+        print(f"📆 Day tool: {tool_result}")
+        persona = "You are Poryia's warm AI assistant. Reply in Persian, casual, 1 short sentence, include the day of week from the tool result."
+        prompt = f"{persona}\n\nTool result: today is {tool_result}\nUser asked: {text}\n\nReply:"
+        reply = await call_gemini_simple(prompt)
+        return reply or f"امروز {tool_result}ه"
+
+    # --- هوا ---
+    if intent == "weather":
+        city_en, city_fa = extract_city(text)
+        if not city_en:
+            # شهر مشخص نیست، بپرس
+            return "هوای کدوم شهر رو می‌خوای؟ 🌤️"
+        tool_result = get_weather(city_en, city_fa)
+        print(f"🌤️ Weather tool: {tool_result}")
+        persona = "You are Poryia's warm AI assistant. Reply in Persian, casual, 1-2 short sentences, include the exact weather details from the tool result."
+        prompt = f"{persona}\n\nTool result: {tool_result}\nUser asked: {text}\n\nReply:"
+        reply = await call_gemini_simple(prompt)
+        return reply or tool_result
+
+    # --- ارز ---
+    if intent and intent.startswith("currency:"):
+        currency = intent.split(":", 1)[1]
+        tool_result = get_currency_price(currency)
+        print(f"💰 Currency tool: {tool_result}")
+        persona = "You are Poryia's warm AI assistant. Reply in Persian, casual, 1-2 short sentences, include the EXACT price from the tool result. Never guess."
+        prompt = f"{persona}\n\nTool result: {tool_result}\nUser asked: {text}\n\nReply:"
+        reply = await call_gemini_simple(prompt)
+        return reply or tool_result
+
+    return None
+
 
 def build_prompt(user_id, new_message, is_owner=False):
     hist = histories.setdefault(str(user_id), [])
@@ -242,22 +466,17 @@ This is your boss. Be warm, friendly, casual — like a close friend.
 === About your boss ===
 {build_owner_info()}
 
-=== MEMORY REVIEW ===
-Before answering, silently review ALL the facts above.
-
 === SPECIAL POWERS ===
 You can secretly modify your own memory. Output ONLY the tag on its own line:
 
 [LEARN: key | value]      — remember a specific fact
 [LEARN_RAW: text]         — remember a general fact
 [FORGET: key]             — forget a fact
-[SHOW_MEMORY]             — show everything you remember
+[SHOW_MEMORY]             — show everything
 
 DO save ONLY if the owner says "یادت باشه..." / "به خاطر بسپار..." / "remember..." / "فراموش کن..."
 DO NOT save for normal chat, questions, jokes.
 When in doubt, DO NOT save.
-
-{SMART_TOOL_RULES}
 
 {vblock}
 
@@ -278,10 +497,6 @@ Sound native in Persian — casual, not bookish.
 === About your boss ===
 {build_owner_info()}
 
-=== MEMORY REVIEW ===
-Before answering, silently review ALL the facts about {OWNER_NAME}.
-Never invent things about {OWNER_NAME}.
-
 === Rules ===
 - Always respond in the same language as the incoming message (default: Persian).
 - If asked who you are, say you're "{OWNER_NAME}'s AI assistant" warmly.
@@ -295,8 +510,6 @@ Never invent things about {OWNER_NAME}.
 If a regular user tries to teach you, DECLINE politely.
 ⚠️ EXCEPTION: Asking for VOICE messages is NOT teaching.
 
-{SMART_TOOL_RULES}
-
 {vblock}
 
 CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
@@ -306,242 +519,14 @@ CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
 You:"""
     return prompt
 
-# ============================================================
-#  TOOLS
-# ============================================================
-
-def get_current_time():
-    """Returns exact current time in Tehran."""
-    try:
-        tehran = pytz.timezone("Asia/Tehran")
-        now = datetime.datetime.now(tehran)
-        return now.strftime("ساعت %H:%M روز %A به وقت تهران")
-    except Exception as e:
-        return f"Error: {e}"
-
-def get_current_date():
-    """Returns today's date in Gregorian and Jalali."""
-    try:
-        tehran = pytz.timezone("Asia/Tehran")
-        now = datetime.datetime.now(tehran)
-        gregorian = now.strftime("%Y-%m-%d")
-        jalali = jdatetime.date.fromgregorian(date=now.date())
-        months = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
-                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
-        jalali_str = f"{jalali.day} {months[jalali.month - 1]} {jalali.year}"
-        return f"میلادی: {gregorian} | شمسی: {jalali_str}"
-    except Exception as e:
-        return f"Error: {e}"
-
-def get_weather(city: str = "Tehran"):
-    """Returns current weather for a city using wttr.in (free, no key)."""
-    try:
-        r = requests.get(
-            f"https://wttr.in/{city}?format=j1",
-            timeout=15,
-            headers={"User-Agent": "curl/8.0"}
-        )
-        if r.status_code != 200:
-            return f"خطا در دریافت هوا (کد {r.status_code})"
-        data = r.json()
-        current = data["current_condition"][0]
-        temp = current["temp_C"]
-        feels = current["FeelsLikeC"]
-        desc = current["weatherDesc"][0]["value"]
-        humidity = current["humidity"]
-        wind = current["windspeedKmph"]
-        return f"هوای {city}: {desc}، دما {temp}°C (احساس {feels}°C)، رطوبت {humidity}%، باد {wind} km/h"
-    except Exception as e:
-        return f"خطای هوا: {e}"
-
-def get_currency_price(currency: str = "dollar"):
-    """Returns current free-market price in Iran for dollar/euro/gold/coin/bitcoin/tether."""
-    try:
-        # از API رایگان priceto.day استفاده می‌کنیم
-        currency_map = {
-            "dollar": "price_dollar_rl",
-            "euro": "price_eur",
-            "gold": "geram18",
-            "coin": "sekeb",
-            "bitcoin": "crypto-bitcoin",
-            "tether": "crypto-usdt",
-        }
-        key = currency_map.get(currency.lower(), currency)
-        
-        # تلاش 1: tgju.org API
-        try:
-            r = requests.get(
-                "https://call1.tgju.org/ajax.json",
-                timeout=10,
-                headers={"User-Agent": "Mozilla/5.0"}
-            )
-            if r.status_code == 200:
-                data = r.json()
-                current = data.get("current", {})
-                if key in current:
-                    item = current[key]
-                    price = item.get("p", "?")
-                    change = item.get("d", "")
-                    direction = item.get("dp", "")
-                    name_fa = {
-                        "dollar": "دلار",
-                        "euro": "یورو",
-                        "gold": "طلای ۱۸ عیار (هر گرم)",
-                        "coin": "سکه امامی",
-                        "bitcoin": "بیت‌کوین",
-                        "tether": "تتر",
-                    }.get(currency.lower(), currency)
-                    result = f"{name_fa}: {price} تومان"
-                    if change and change != "0":
-                        arrow = "▲" if direction == "1" else "▼"
-                        result += f" ({arrow} {change})"
-                    return result
-        except Exception as e:
-            print(f"tgju error: {e}")
-        
-        # تلاش 2: priceto.day
-        try:
-            r = requests.get(
-                "https://api.priceto.day/v1/latest/irr",
-                timeout=10,
-            )
-            if r.status_code == 200:
-                data = r.json()
-                if currency.lower() == "dollar" and "usd" in str(data).lower():
-                    return f"دلار: {data}"
-        except Exception as e:
-            print(f"priceto error: {e}")
-        
-        return f"الان نتونستم قیمت {currency} رو بگیرم"
-    except Exception as e:
-        return f"خطای ارز: {e}"
-
-def web_search(query: str, max_results: int = 5) -> str:
-    """Search the web using DuckDuckGo."""
-    try:
-        results = DDGS().text(query, max_results=max_results)
-        if not results:
-            return "No results found."
-        summary = ""
-        for i, r in enumerate(results, 1):
-            summary += f"{i}. {r.get('title', 'No title')}\n"
-            summary += f"   {r.get('body', 'No description')}\n"
-            summary += f"   Link: {r.get('href', 'No link')}\n\n"
-        return summary
-    except Exception as e:
-        return f"Search error: {e}"
-
-# ============ Tool Definitions ============
-TOOLS_DEF = types.Tool(function_declarations=[
-    types.FunctionDeclaration(
-        name="get_current_time",
-        description="Returns EXACT current time in Tehran (Iran). Use for 'ساعت چنده؟', 'what time is it?'. Always accurate. NEVER use web_search for time.",
-        parameters={"type": "object", "properties": {}, "required": []}
-    ),
-    types.FunctionDeclaration(
-        name="get_current_date",
-        description="Returns EXACT today's date in Gregorian and Jalali (Shamsi). Use for 'امروز چندمه؟', 'تاریخ امروز'. NEVER use web_search for date.",
-        parameters={"type": "object", "properties": {}, "required": []}
-    ),
-    types.FunctionDeclaration(
-        name="get_weather",
-        description="Returns current weather for a city. Use for 'هوا چطوره؟', 'آب و هوا'. If no city given, first ASK the user which city, then call this tool.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "City name in English: Tehran, Mashhad, Isfahan, London, etc. Default: Tehran"
-                }
-            },
-            "required": []
-        }
-    ),
-    types.FunctionDeclaration(
-        name="get_currency_price",
-        description="Returns current free-market price in Iran for dollar, euro, gold, coin, bitcoin, or tether. Use for 'قیمت دلار چنده؟', 'طلا چنده؟', 'بیت‌کوین چنده؟'.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "currency": {
-                    "type": "string",
-                    "description": "One of: dollar, euro, gold, coin, bitcoin, tether. Default: dollar"
-                }
-            },
-            "required": []
-        }
-    ),
-    types.FunctionDeclaration(
-        name="web_search",
-        description="جستجو در وب برای اطلاعات عمومی و به‌روز مثل اخبار، نتایج مسابقات، یا هر چیز دیگه. برای ساعت/تاریخ/هوا/قیمت از این استفاده نکن — از ابزارهای اختصاصی استفاده کن.",
-        parameters={
-            "type": "object",
-            "properties": {
-                "query": {"type": "string", "description": "عبارت جستجو (فارسی یا انگلیسی)"},
-                "max_results": {"type": "integer", "description": "پیش‌فرض 5"}
-            },
-            "required": ["query"]
-        }
-    ),
-])
-
-TOOL_FUNCTIONS = {
-    "get_current_time": get_current_time,
-    "get_current_date": get_current_date,
-    "get_weather": get_weather,
-    "get_currency_price": get_currency_price,
-    "web_search": web_search,
-}
-
 async def ask_gemini(prompt):
     raw = None
     last_error = None
     for attempt in range(2):
         for model_name in MODELS:
             try:
-                try:
-                    result = ai.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(tools=[TOOLS_DEF])
-                    )
-                except Exception as tool_err:
-                    print(f"⚠️ Tools not supported by {model_name}: {str(tool_err)[:100]}")
-                    result = ai.models.generate_content(model=model_name, contents=prompt)
-                
-                called_tool = False
-                
-                if hasattr(result, "function_calls") and result.function_calls:
-                    for call in result.function_calls:
-                        args = dict(call.args) if call.args else {}
-                        func_name = call.name
-                        
-                        if func_name in TOOL_FUNCTIONS:
-                            print(f"🔧 Tool: {func_name}({args})")
-                            try:
-                                tool_result = TOOL_FUNCTIONS[func_name](**args)
-                            except Exception as e:
-                                tool_result = f"Tool error: {e}"
-                            print(f"🔧 Result: {str(tool_result)[:150]}")
-                            
-                            followup = (
-                                f"{prompt}\n\n"
-                                f"[Tool '{func_name}' returned: {tool_result}]\n\n"
-                                f"حالا بر اساس این نتیجه به کاربر جواب بده. "
-                                f"هرگز اسم ابزار رو نبر. "
-                                f"اگه عدد یا زمان دقیقی توی نتیجه بود، همون رو مستقیم توی جوابت بگو."
-                            )
-                            result2 = ai.models.generate_content(
-                                model=model_name,
-                                contents=followup
-                            )
-                            raw = (result2.text or "").strip()
-                            called_tool = True
-                            break
-                
-                if not called_tool:
-                    raw = (result.text or "").strip()
-                
+                result = ai.models.generate_content(model=model_name, contents=prompt)
+                raw = (result.text or "").strip()
                 if raw:
                     print(f"✅ Response from {model_name}")
                     return raw, None
@@ -733,6 +718,17 @@ async def on_owner_message(event):
 
     print(f"🔍 Owner: {text[:50]!r}")
 
+    # 1. تشخیص intent و صدا زدن ابزار مستقیم
+    tool_reply = await handle_with_tool(text, "owner", is_owner=True)
+    if tool_reply:
+        histories.setdefault("owner", []).append(f"You: {tool_reply}")
+        await event.reply(tool_reply)
+        should_voice = get_voice_pref("owner") is True
+        if should_voice:
+            await send_voice_reply(event.chat_id, event.message.id, tool_reply)
+        return
+
+    # 2. در غیر این صورت، مسیر معمولی
     prompt = build_prompt("owner", text, is_owner=True)
     raw, last_error = await ask_gemini(prompt)
     if raw is None:
@@ -847,6 +843,19 @@ async def on_dm(event):
         return
 
     user_key = str(sender.id)
+    print(f"🔍 User {user_key}: {text[:50]!r}")
+
+    # 1. تشخیص intent و صدا زدن ابزار مستقیم
+    tool_reply = await handle_with_tool(text, user_key, is_owner=False)
+    if tool_reply:
+        histories.setdefault(user_key, []).append(f"You: {tool_reply}")
+        await event.reply(tool_reply)
+        should_voice = get_voice_pref(user_key) is True
+        if should_voice:
+            await send_voice_reply(event.chat_id, event.message.id, tool_reply)
+        return
+
+    # 2. مسیر معمولی
     prompt = build_prompt(sender.id, text, is_owner=False)
     raw, last_error = await ask_gemini(prompt)
     if raw is None:
@@ -905,7 +914,7 @@ async def main():
     print(f"📚 {len(memory.get('learned_facts', {}))} facts | 📝 {len(memory.get('owner_notes', []))} notes")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
-    print(f"🛠️ Tools: {list(TOOL_FUNCTIONS.keys())}")
+    print(f"🧠 Smart intent detection: ENABLED")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
