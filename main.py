@@ -13,10 +13,11 @@ OWNER_NAME = os.environ.get("OWNER_NAME", "the owner")
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
+# لیست مدل‌ها به ترتیب اولویت (سبک‌ترها پایین‌ترن)
 MODELS = [
     "gemini-3.8-flash",
-    "gemini-3.8-flash-lite",
-    "gemini-3.5-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash-lite",
 ]
 
 ASSISTANT_PROMPT = f"""You are the personal AI assistant of {OWNER_NAME}.
@@ -72,10 +73,11 @@ async def on_dm(event):
                 contents=prompt,
             )
             raw = (result.text or "").strip()
+            print(f"✅ Response from {model_name}")
             break
         except Exception as e:
             last_error = e
-            print(f"Gemini error with {model_name}:", e)
+            print(f"❌ Gemini error with {model_name}:", e)
             continue
 
     if raw is None:
