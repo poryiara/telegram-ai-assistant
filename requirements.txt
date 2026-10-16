@@ -3,3 +3,5 @@ google-genai
 requests
 edge-tts
 ddgs
+pytz
+jdatetime
