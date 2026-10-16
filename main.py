@@ -86,7 +86,6 @@ def push_memory(mem):
 
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
 
-    # SHA فعلی رو بگیر
     _, sha = fetch_memory()
 
     content = base64.b64encode(
@@ -160,13 +159,38 @@ Tags you can use:
 [FORGET: key]             — forget a fact
 [SHOW_MEMORY]             — show the owner everything you remember
 
-When to use them:
-- If the owner tells you something to remember → use [LEARN] or [LEARN_RAW]
-- If the owner says forget something → use [FORGET]
-- If the owner asks what you know / what you remember → use [SHOW_MEMORY]
-- If the owner just chats normally → reply normally, NO tags
+⚠️ CRITICAL: Be VERY conservative about saving. Only save when the owner
+EXPLICITLY and CLEARLY asks you to remember something.
+
+DO save if the owner says things like:
+- "یادت باشه..." / "به خاطر بسپار..." / "اینو یادت بمونه..."
+- "remember that..." / "keep in mind..."
+- "فراموش کن..." / "پاکش کن..." (for FORGET)
+- "چی یادت هست؟" / "چی از من میدونی؟" (for SHOW_MEMORY)
+
+DO NOT save in these cases (just chat normally):
+- Normal conversation, greetings, questions, jokes
+- The owner asking YOU questions (don't save their questions as facts)
+- The owner telling you about their day in passing
+- The owner asking for advice or opinions
+- Small talk, casual chat, or emotional conversations
+- Anything that isn't explicitly a "remember this" request
+
+When in doubt, DO NOT save. Just reply as a friend.
 
 Examples:
+Owner: سلام، خوبی؟
+You: سلام خودم! 😄 خوبم، تو چطوری؟ چه خبر از باشگاه؟
+(NO tags — just chat)
+
+Owner: امروز رفتم باشگاه، خیلی خسته‌ام
+You: آفرین 💪 خستگی بعد از تمرین بهترین حس دنیاست. استراحت کن.
+(NO tags — just chat)
+
+Owner: چه چیزایی میخوای درباره من بدونی؟
+You: هر چی دوست داری بهم بگی 😊 مثلاً علاقه‌مندی‌هات، دوستات، یا هر چیز دیگه‌ای که فکر می‌کنی به بهتر جواب دادن کمک می‌کنه.
+(NO tags — this is a question, not a save request)
+
 Owner: یادت باشه اسم بهترین دوستم علیه
 You: [LEARN: best_friend | Ali]
 
@@ -178,12 +202,6 @@ You: [FORGET: best_friend]
 
 Owner: چی یادت هست درباره من؟
 You: [SHOW_MEMORY]
-
-Owner: سلام، خوبی؟
-You: سلام خودم! 😄 من خوبم، تو چطوری؟ چه خبر از باشگاه؟
-
-Owner: امروز رفتم باشگاه، خیلی خسته‌ام
-You: آفرین 💪 خستگی بعد از تمرین بهترین حس دنیاست. یه آب بخور و استراحت کن.
 
 === Current conversation ===
 {chr(10).join(hist)}
@@ -216,7 +234,6 @@ async def ask_gemini(prompt):
     raw = None
     last_error = None
 
-    # دو دور تلاش: هر دور همه‌ی مدل‌ها رو امتحان می‌کنه
     for attempt in range(2):
         for model_name in MODELS:
             try:
