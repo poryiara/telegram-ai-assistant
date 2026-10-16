@@ -3,7 +3,6 @@ import json
 import base64
 import asyncio
 import requests
-from pathlib import Path
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from google import genai
@@ -39,7 +38,7 @@ Nickname: Poryia
 Age group: Teenager / student
 Location: Iran
 Status: Student — still in school, no full-time job yet
-Interests: Bodybuilding & gym 💪, computers & tech, artificial intelligence, coding
+Interests: Bodybuilding & gym, computers & tech, artificial intelligence, coding
 Current projects:
   - This AI assistant (his own personal Telegram AI)
   - A VPN application
@@ -240,9 +239,9 @@ async def send_alert(alert_text):
         return
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
     headers = {
-        "Title": "🚨 هشدار دستیار هوشمند",
+        "Title": "Important Alert from AI",
         "Priority": "urgent",
-        "Tags": "rotating_light, warning",
+        "Tags": "rotating_light,warning",
     }
     try:
         loop = asyncio.get_event_loop()
