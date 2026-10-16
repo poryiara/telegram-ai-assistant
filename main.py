@@ -21,6 +21,9 @@ GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
 GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
 
+# تاخیر (ثانیه) بین ارسال پیام به Saved Messages و آلارم گوشی
+ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "5"))
+
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELS = [
@@ -372,8 +375,13 @@ async def on_dm(event):
             f"📩 پیام کاربر:\n{text}\n\n"
             f"🤖 جواب دستیار:\n{reply}"
         )
+        # ۱. اول پیام بی‌صدا به Saved Messages
+        await client.send_message("me", alert, silent=True)
+        print(f"📩 Silent alert sent to Saved Messages. Waiting {ALERT_DELAY}s...")
+        # ۲. صبر کن تا صدای تلگرام تموم بشه
+        await asyncio.sleep(ALERT_DELAY)
+        # ۳. بعد آلارم ntfy
         await send_alert(alert)
-        await client.send_message("me", alert)
 
 async def main():
     await client.start()
@@ -384,6 +392,7 @@ async def main():
     print(f"💬 Loaded {len(memory.get('conversations', {}))} conversations")
     if NTFY_TOPIC:
         print(f"🔔 ntfy alerts enabled for topic: {NTFY_TOPIC}")
+        print(f"⏱️ Alert delay: {ALERT_DELAY} seconds")
     await client.run_until_disconnected()
 
 if __name__ == "__main__":
