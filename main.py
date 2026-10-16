@@ -26,6 +26,7 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
 DEFAULT_CITY = os.environ.get("DEFAULT_CITY", "Tehran")
+ENABLE_SEARCH = os.environ.get("ENABLE_SEARCH", "true").lower() == "true"
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
@@ -62,7 +63,7 @@ Notes:
 """
 
 # ============================================================
-#  ابزارها (Tools)
+#  ابزارهای سفارشی (Tools)
 # ============================================================
 
 def get_current_time():
@@ -81,7 +82,6 @@ def get_current_date():
         now = datetime.datetime.now(tehran)
         gregorian = now.strftime("%Y-%m-%d")
         jalali = jdatetime.date.fromgregorian(date=now.date())
-        # نام ماه‌های شمسی
         months = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
                   "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
         jalali_str = f"{jalali.day} {months[jalali.month - 1]} {jalali.year}"
@@ -108,11 +108,9 @@ def get_day_of_week():
         return f"Error: {e}"
 
 def get_weather(city: str = None):
-    """Returns current weather for the given city (defaults to Tehran).
-    Use this when the user asks about weather, temperature, or forecast."""
+    """Returns current weather for the given city (defaults to Tehran)."""
     try:
         city = city or DEFAULT_CITY
-        # wttr.in - free, no API key needed
         r = requests.get(
             f"https://wttr.in/{city}?format=j1",
             timeout=10,
@@ -132,9 +130,7 @@ def get_weather(city: str = None):
         return f"Weather error: {e}"
 
 def get_currency_rate(from_currency: str = "USD", to_currency: str = "IRR"):
-    """Returns exchange rate between two currencies.
-    Use for questions like 'دلار چنده؟' or 'یورو به تومان'.
-    Common currencies: USD, EUR, GBP, AED, TRY, IRR (Iranian Rial)."""
+    """Returns exchange rate between two currencies."""
     try:
         from_currency = from_currency.upper().strip()
         to_currency = to_currency.upper().strip()
@@ -151,7 +147,6 @@ def get_currency_rate(from_currency: str = "USD", to_currency: str = "IRR"):
         if to_currency not in rates:
             return f"Currency {to_currency} not found."
         rate = rates[to_currency]
-        # برای تومان، رِیال رو تقسیم بر ۱۰ کن (چون تومان = ۱۰ ریال)
         if to_currency == "IRR":
             toman = rate / 10
             return f"1 {from_currency} = {rate:,.0f} IRR = {toman:,.0f} تومان"
@@ -456,19 +451,24 @@ async def ask_gemini(prompt):
     for attempt in range(2):
         for model_name in MODELS:
             try:
-                # تلاش اول با ابزارها
+                # ابزارها: هم Google Search (اگه فعال باشه) و هم توابع سفارشی
+                tools_list = []
+                if ENABLE_SEARCH:
+                    tools_list.append(types.Tool(google_search=types.GoogleSearch()))
+                if TOOLS:
+                    tools_list.append(types.Tool(function_declarations=[
+                        types.FunctionDeclaration(**t) for t in TOOLS
+                    ]))
+                
+                config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
+                
                 try:
                     result = ai.models.generate_content(
                         model=model_name,
                         contents=prompt,
-                        config=types.GenerateContentConfig(
-                            tools=[types.Tool(function_declarations=[
-                                types.FunctionDeclaration(**t) for t in TOOLS
-                            ])]
-                        )
+                        config=config,
                     )
                 except Exception as tool_err:
-                    # اگه ابزارها پشتیبانی نشدن، بدون ابزار امتحان کن
                     print(f"⚠️ Tools not supported by {model_name}, trying without: {str(tool_err)[:80]}")
                     result = ai.models.generate_content(model=model_name, contents=prompt)
                 
@@ -486,7 +486,6 @@ async def ask_gemini(prompt):
                                 tool_result = f"Tool error: {e}"
                             print(f"🔧 Tool result: {tool_result}")
                             
-                            # نتیجه رو دوباره به AI بده
                             followup = (
                                 f"{prompt}\n\n"
                                 f"[Tool '{func_name}' returned: {tool_result}]\n\n"
@@ -547,7 +546,6 @@ async def transcribe_voice(voice_path):
         with open(voice_path, "rb") as f:
             audio_data = f.read()
         
-        # با Gemini رونویسی کن
         for model_name in ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]:
             try:
                 response = ai.models.generate_content(
@@ -676,7 +674,6 @@ async def on_owner_message(event):
 
     text = event.message.text or ""
 
-    # اگه ویس بود، تبدیل کن
     if not text.strip() and event.message.voice:
         await event.reply("🎤 دارم گوش می‌دم...")
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
@@ -795,7 +792,6 @@ async def on_dm(event):
 
     text = event.message.text or ""
 
-    # اگه ویس بود، تبدیل کن
     if not text.strip() and event.message.voice:
         await event.reply("🎤 دارم گوش می‌دم...")
         with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
@@ -875,6 +871,7 @@ async def main():
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
     print(f"🛠️ Tools: {list(TOOL_FUNCTIONS.keys())}")
+    print(f"🔍 Web Search: {'enabled' if ENABLE_SEARCH else 'disabled'}")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
