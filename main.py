@@ -26,7 +26,10 @@ ai = genai.Client(api_key=GEMINI_API_KEY)
 MODELS = [
     "gemini-3.8-flash",
     "gemini-3.6-flash",
+    "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
 ]
 
 # ============ اطلاعات پایه مالک ============
@@ -56,11 +59,10 @@ def github_headers():
     }
 
 def fetch_memory():
-    """حافظه رو از گیت‌هاب می‌خونه"""
     if not GITHUB_TOKEN:
         print("⚠️ No GITHUB_TOKEN — using empty memory")
         return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
-    
+
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     try:
         r = requests.get(url, headers=github_headers(), params={"ref": GITHUB_BRANCH}, timeout=10)
@@ -75,23 +77,22 @@ def fetch_memory():
             print(f"⚠️ GitHub fetch error: {r.status_code} {r.text[:200]}")
     except Exception as e:
         print(f"⚠️ GitHub fetch exception: {e}")
-    
+
     return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
 
 def push_memory(mem):
-    """حافظه رو توی گیت‌هاب ذخیره می‌کنه"""
     if not GITHUB_TOKEN:
         return
-    
+
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
-    
-    # اول SHA فعلی رو بگیر
+
+    # SHA فعلی رو بگیر
     _, sha = fetch_memory()
-    
+
     content = base64.b64encode(
         json.dumps(mem, ensure_ascii=False, indent=2).encode("utf-8")
     ).decode("utf-8")
-    
+
     payload = {
         "message": "Update AI memory",
         "content": content,
@@ -99,7 +100,7 @@ def push_memory(mem):
     }
     if sha:
         payload["sha"] = sha
-    
+
     try:
         r = requests.put(url, headers=github_headers(), json=payload, timeout=15)
         if r.status_code in (200, 201):
@@ -110,7 +111,6 @@ def push_memory(mem):
         print(f"⚠️ GitHub push exception: {e}")
 
 def save_memory_async():
-    """ذخیره غیرهمزمان (بلاک نکنه)"""
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, push_memory, memory)
 
@@ -123,24 +123,24 @@ def build_owner_info():
     info = OWNER_INFO_BASE
     facts = memory.get("learned_facts", {})
     notes = memory.get("owner_notes", [])
-    
+
     if facts:
         info += "\n\n=== Learned facts (from owner) ===\n"
         for key, value in facts.items():
             info += f"- {key}: {value}\n"
-    
+
     if notes:
         info += "\n\n=== Owner's notes ===\n"
         for note in notes:
             info += f"- {note}\n"
-    
+
     return info
 
 def build_prompt(user_id, new_message, is_owner=False):
     hist = histories.setdefault(str(user_id), [])
     hist.append(f"User: {new_message}")
     del hist[:-MAX_HISTORY]
-    
+
     if is_owner:
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You are talking to {OWNER_NAME} THEMSELVES in their Saved Messages.
@@ -215,38 +215,63 @@ You:"""
 async def ask_gemini(prompt):
     raw = None
     last_error = None
-    for model_name in MODELS:
-        try:
-            result = ai.models.generate_content(
-                model=model_name,
-                contents=prompt,
-            )
-            raw = (result.text or "").strip()
-            print(f"✅ Response from {model_name}")
-            break
-        except Exception as e:
-            last_error = e
-            print(f"❌ Gemini error with {model_name}:", e)
-            continue
-    return raw, last_error
+
+    # دو دور تلاش: هر دور همه‌ی مدل‌ها رو امتحان می‌کنه
+    for attempt in range(2):
+        for model_name in MODELS:
+            try:
+                result = ai.models.generate_content(
+                    model=model_name,
+                    contents=prompt,
+                )
+                raw = (result.text or "").strip()
+                print(f"✅ Response from {model_name}")
+                return raw, None
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                if "503" in err_str or "UNAVAILABLE" in err_str:
+                    print(f"⏳ {model_name} busy, trying next...")
+                else:
+                    print(f"❌ Gemini error with {model_name}:", err_str[:150])
+                continue
+
+        if attempt == 0:
+            print("⏸️ All models busy — waiting 3s before retry...")
+            await asyncio.sleep(3)
+
+    return None, last_error
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
-# ============ هندلر ادمین ============
-@client.on(events.NewMessage(outgoing=True, func=lambda e: e.is_private and e.chat_id == OWNER_ID))
+# ============ هندلر ادمین (Saved Messages) ============
+@client.on(events.NewMessage(outgoing=True))
 async def on_owner_message(event):
+    if not event.is_private:
+        return
+
+    try:
+        me = await client.get_me()
+        if event.sender_id != me.id:
+            return
+    except Exception as e:
+        print(f"⚠️ Owner check error: {e}")
+        return
+
     text = event.message.text or ""
+    print(f"🔍 Owner message: {text[:50]!r}")
+
     if not text.strip():
         return
-    
+
     prompt = build_prompt("owner", text, is_owner=True)
     raw, last_error = await ask_gemini(prompt)
-    
+
     if raw is None:
-        await event.reply(f"❌ خطا: {last_error}")
+        await event.reply("اوه، الان سرورای گوگل شلوغن 😅 یه دقیقه دیگه دوباره بفرست.")
         return
-    
+
     # ==== پردازش تگ‌های مخفی ====
     if "[LEARN:" in raw:
         try:
@@ -259,7 +284,7 @@ async def on_owner_message(event):
                 return
         except Exception as e:
             print(f"LEARN parse error: {e}")
-    
+
     if "[LEARN_RAW:" in raw:
         try:
             inner = raw.split("[LEARN_RAW:", 1)[1].split("]", 1)[0].strip()
@@ -270,7 +295,7 @@ async def on_owner_message(event):
             return
         except Exception as e:
             print(f"LEARN_RAW parse error: {e}")
-    
+
     if "[FORGET:" in raw:
         try:
             key = raw.split("[FORGET:", 1)[1].split("]", 1)[0].strip()
@@ -284,7 +309,7 @@ async def on_owner_message(event):
             return
         except Exception as e:
             print(f"FORGET parse error: {e}")
-    
+
     if "[SHOW_MEMORY]" in raw:
         facts = memory.get("learned_facts", {})
         notes = memory.get("owner_notes", [])
@@ -301,16 +326,16 @@ async def on_owner_message(event):
                 reply += f"• {n}\n"
         await event.reply(reply)
         return
-    
+
     # ==== پاسخ عادی ====
     reply = raw.replace("[IMPORTANT]", "").replace("[NORMAL]", "").strip()
     if not reply:
         return
-    
+
     histories.setdefault("owner", []).append(f"You: {reply}")
     memory["conversations"] = histories
     save_memory_async()
-    
+
     await event.reply(reply)
 
 
@@ -330,6 +355,7 @@ async def on_dm(event):
 
     if raw is None:
         print("All models failed. Last error:", last_error)
+        await event.reply("الان یه کم شلوغم، چند لحظه دیگه دوباره پیام بده 🙏")
         return
 
     important = "[IMPORTANT]" in raw
