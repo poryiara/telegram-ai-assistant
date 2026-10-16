@@ -30,18 +30,16 @@ MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
-# ترتیب از قوی‌ترین به ضعیف‌ترین
 MODELS = [
-    "gemini-3.8-flash",        # قوی‌ترین
+    "gemini-3.8-flash",
     "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3-flash",
     "gemini-3.5-flash-lite",
-    "gemini-3.1-flash-lite",   # ضعیف‌ترین (ولی سقف بالا)
+    "gemini-3.1-flash-lite",
 ]
 
-# ترتیب برای STT (ویس ورودی)
 STT_MODELS = [
     "gemini-3.8-flash",
     "gemini-3.7-flash",
@@ -51,7 +49,6 @@ STT_MODELS = [
     "gemini-3.1-flash-lite",
 ]
 
-# تأخیر بین تلاش‌های مجدد (ثانیه)
 RETRY_DELAY = 0.5
 
 OWNER_INFO_BASE = """
@@ -80,7 +77,7 @@ def github_headers():
     }
 
 def fetch_memory():
-    empty = {"conversations": {}, "learned_facts": {}, "owner_notes": [], "voice_preferences": {}}
+    empty = {"learned_facts": {}, "owner_notes": [], "voice_preferences": {}}
     if not GITHUB_TOKEN:
         print("⚠️ No GITHUB_TOKEN — using empty memory")
         return empty, None
@@ -92,9 +89,10 @@ def fetch_memory():
             content = base64.b64decode(data["content"]).decode("utf-8")
             mem = json.loads(content)
             mem.setdefault("voice_preferences", {})
-            mem.setdefault("conversations", {})
             mem.setdefault("learned_facts", {})
             mem.setdefault("owner_notes", [])
+            # حذف conversations اگه بود
+            mem.pop("conversations", None)
             return mem, data["sha"]
         elif r.status_code == 404:
             print("ℹ️ memory.json not found — starting fresh")
@@ -106,36 +104,48 @@ def fetch_memory():
     return empty, None
 
 def push_memory(mem):
+    """فقط سه تا کلید مهم رو ذخیره می‌کنه — نه conversations"""
     if not GITHUB_TOKEN:
         return
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     _, sha = fetch_memory()
-    content = base64.b64encode(json.dumps(mem, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+    to_save = {
+        "learned_facts": mem.get("learned_facts", {}),
+        "owner_notes": mem.get("owner_notes", []),
+        "voice_preferences": mem.get("voice_preferences", {}),
+    }
+    content = base64.b64encode(json.dumps(to_save, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
     payload = {"message": "Update AI memory", "content": content, "branch": GITHUB_BRANCH}
     if sha:
         payload["sha"] = sha
     try:
         r = requests.put(url, headers=github_headers(), json=payload, timeout=15)
         if r.status_code in (200, 201):
-            print("💾 Memory synced to GitHub")
+            print("💾 Memory saved")
         else:
             print(f"⚠️ GitHub push error: {r.status_code} {r.text[:200]}")
     except Exception as e:
         print(f"⚠️ GitHub push exception: {e}")
 
 def save_memory_async():
+    """فقط وقتی صدا زده می‌شه که واقعاً چیزی تغییر کرده"""
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, push_memory, memory)
 
 memory, _sha = fetch_memory()
-histories = memory.get("conversations", {})
+histories = {}  # فقط توی RAM — هیچ‌وقت ذخیره نمی‌شه
 MAX_HISTORY = 12
 
 def get_voice_pref(key):
     return memory.get("voice_preferences", {}).get(str(key))
 
 def set_voice_pref(key, value):
-    memory.setdefault("voice_preferences", {})[str(key)] = value
+    """فقط اگه مقدار تغییر کرده، ذخیره کن"""
+    key = str(key)
+    current = memory.get("voice_preferences", {}).get(key)
+    if current == value:
+        return
+    memory.setdefault("voice_preferences", {})[key] = value
     save_memory_async()
 
 def build_owner_info():
@@ -281,11 +291,9 @@ You:"""
     return prompt
 
 async def ask_gemini(prompt):
-    """فراخوانی Gemini با fallback بین مدل‌ها (بدون تأخیر غیرضروری)"""
     raw = None
     last_error = None
 
-    # دور اول: سریع همه‌ی مدل‌ها رو امتحان کن
     for model_name in MODELS:
         try:
             result = ai.models.generate_content(model=model_name, contents=prompt)
@@ -309,8 +317,7 @@ async def ask_gemini(prompt):
                 print(f"❌ {model_name}: {err_str[:80]}")
             continue
 
-    # دور دوم: فقط یه بار دیگه بعد از تأخیر کوتاه
-    print(f"⏸️ retrying in {RETRY_DELAY}s...")
+    print(f"⏸️ retry in {RETRY_DELAY}s...")
     await asyncio.sleep(RETRY_DELAY)
     for model_name in MODELS:
         try:
@@ -345,9 +352,8 @@ async def send_alert(alert_text):
     except Exception as e:
         print(f"⚠️ ntfy error: {e}")
 
-# ============ Speech-to-Text (دریافت ویس) ============
+# ============ Speech-to-Text ============
 async def transcribe_voice(voice_path):
-    """تبدیل ویس ورودی به متن با Gemini"""
     try:
         with open(voice_path, "rb") as f:
             audio_data = f.read()
@@ -394,7 +400,6 @@ async def transcribe_voice(voice_path):
 
 
 async def handle_voice_input(event):
-    """دانلود ویس، تبدیل به متن"""
     try:
         await event.reply("🎤 دارم گوش می‌دم...")
     except:
@@ -415,7 +420,7 @@ async def handle_voice_input(event):
     return text
 
 
-# ============ Text-to-Speech (ارسال ویس) ============
+# ============ Text-to-Speech ============
 def clean_text_for_voice(text):
     emoji_pattern = re.compile(
         "["
@@ -597,10 +602,8 @@ async def on_owner_message(event):
 
     if enable_voice:
         set_voice_pref("owner", True)
-        print("🎤 Voice ENABLED for owner")
     elif disable_voice:
         set_voice_pref("owner", False)
-        print("🔇 Voice DISABLED for owner")
 
     reply = (
         raw.replace("[IMPORTANT]", "")
@@ -612,9 +615,8 @@ async def on_owner_message(event):
     if not reply:
         return
 
+    # تاریخچه فقط توی RAM — ذخیره نمی‌شه
     histories.setdefault("owner", []).append(f"You: {reply}")
-    memory["conversations"] = histories
-    save_memory_async()
 
     await event.reply(reply)
 
@@ -657,10 +659,8 @@ async def on_dm(event):
 
     if enable_voice:
         set_voice_pref(user_key, True)
-        print(f"🎤 Voice ENABLED for {user_key}")
     elif disable_voice:
         set_voice_pref(user_key, False)
-        print(f"🔇 Voice DISABLED for {user_key}")
 
     reply = (
         raw.replace("[IMPORTANT]", "")
@@ -672,9 +672,8 @@ async def on_dm(event):
     if not reply:
         return
 
+    # تاریخچه فقط توی RAM — ذخیره نمی‌شه
     histories.setdefault(user_key, []).append(f"You: {reply}")
-    memory["conversations"] = histories
-    save_memory_async()
 
     await event.reply(reply)
 
@@ -703,12 +702,12 @@ async def main():
     me = await client.get_me()
     print(f"✅ Logged in as {me.first_name} (id={me.id})")
     print("🚀 Userbot is running...")
-    print(f"📚 {len(memory.get('learned_facts', {}))} facts | 💬 {len(memory.get('conversations', {}))} convos")
+    print(f"📚 {len(memory.get('learned_facts', {}))} facts | 📝 {len(memory.get('owner_notes', []))} notes")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice output: {VOICE_NAME}")
     print(f"🎙️ Voice input: enabled (Gemini STT)")
     print(f"🛡️ Owner handler: Saved Messages only")
-    print(f"🧠 Models: {len(MODELS)} (from strongest to weakest)")
+    print(f"💾 Memory saves: only on facts/voice changes (not on every message)")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
