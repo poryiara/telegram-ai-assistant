@@ -13,6 +13,12 @@ OWNER_NAME = os.environ.get("OWNER_NAME", "the owner")
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
+MODELS = [
+    "gemini-3.8-flash",
+    "gemini-3.8-flash-lite",
+    "gemini-3.5-flash",
+]
+
 ASSISTANT_PROMPT = f"""You are the personal AI assistant of {OWNER_NAME}.
 You answer Telegram messages on their behalf while they are away.
 
@@ -57,14 +63,23 @@ async def on_dm(event):
 
     prompt = build_prompt(sender.id, text)
 
-    try:
-        result = ai.models.generate_content(
-            model="gemini-3.8-flash",
-            contents=prompt,
-        )
-        raw = (result.text or "").strip()
-    except Exception as e:
-        print("Gemini error:", e)
+    raw = None
+    last_error = None
+    for model_name in MODELS:
+        try:
+            result = ai.models.generate_content(
+                model=model_name,
+                contents=prompt,
+            )
+            raw = (result.text or "").strip()
+            break
+        except Exception as e:
+            last_error = e
+            print(f"Gemini error with {model_name}:", e)
+            continue
+
+    if raw is None:
+        print("All models failed. Last error:", last_error)
         return
 
     important = "[IMPORTANT]" in raw
