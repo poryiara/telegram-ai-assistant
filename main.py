@@ -6,9 +6,6 @@ import requests
 import subprocess
 import tempfile
 import re
-import datetime
-import pytz
-import jdatetime
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from google import genai
@@ -25,8 +22,6 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
-DEFAULT_CITY = os.environ.get("DEFAULT_CITY", "Tehran")
-ENABLE_SEARCH = os.environ.get("ENABLE_SEARCH", "true").lower() == "true"
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
@@ -61,162 +56,6 @@ Notes:
   - He's a student, so he's often busy with school during the day.
   - If someone's reaching out about a project or tech-related, that's usually important.
 """
-
-# ============================================================
-#  ابزارهای سفارشی (Tools)
-# ============================================================
-
-def get_current_time():
-    """Returns current time in Tehran timezone (HH:MM)."""
-    try:
-        tehran = pytz.timezone("Asia/Tehran")
-        now = datetime.datetime.now(tehran)
-        return now.strftime("%H:%M")
-    except Exception as e:
-        return f"Error: {e}"
-
-def get_current_date():
-    """Returns today's date in both Gregorian and Jalali (Shamsi) format."""
-    try:
-        tehran = pytz.timezone("Asia/Tehran")
-        now = datetime.datetime.now(tehran)
-        gregorian = now.strftime("%Y-%m-%d")
-        jalali = jdatetime.date.fromgregorian(date=now.date())
-        months = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
-                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
-        jalali_str = f"{jalali.day} {months[jalali.month - 1]} {jalali.year}"
-        return f"Gregorian: {gregorian} | Jalali: {jalali_str}"
-    except Exception as e:
-        return f"Error: {e}"
-
-def get_day_of_week():
-    """Returns today's day of the week in Persian."""
-    try:
-        tehran = pytz.timezone("Asia/Tehran")
-        now = datetime.datetime.now(tehran)
-        days = {
-            "Saturday": "شنبه",
-            "Sunday": "یکشنبه",
-            "Monday": "دوشنبه",
-            "Tuesday": "سه‌شنبه",
-            "Wednesday": "چهارشنبه",
-            "Thursday": "پنجشنبه",
-            "Friday": "جمعه"
-        }
-        return days.get(now.strftime("%A"), now.strftime("%A"))
-    except Exception as e:
-        return f"Error: {e}"
-
-def get_weather(city: str = None):
-    """Returns current weather for the given city (defaults to Tehran)."""
-    try:
-        city = city or DEFAULT_CITY
-        r = requests.get(
-            f"https://wttr.in/{city}?format=j1",
-            timeout=10,
-            headers={"User-Agent": "curl/8.0"}
-        )
-        if r.status_code != 200:
-            return f"Could not fetch weather for {city}. Status: {r.status_code}"
-        data = r.json()
-        current = data["current_condition"][0]
-        temp = current["temp_C"]
-        feels = current["FeelsLikeC"]
-        desc = current["weatherDesc"][0]["value"]
-        humidity = current["humidity"]
-        wind = current["windspeedKmph"]
-        return f"{city}: {desc}, {temp}°C (feels like {feels}°C), humidity {humidity}%, wind {wind} km/h"
-    except Exception as e:
-        return f"Weather error: {e}"
-
-def get_currency_rate(from_currency: str = "USD", to_currency: str = "IRR"):
-    """Returns exchange rate between two currencies."""
-    try:
-        from_currency = from_currency.upper().strip()
-        to_currency = to_currency.upper().strip()
-        r = requests.get(
-            f"https://open.er-api.com/v6/latest/{from_currency}",
-            timeout=10
-        )
-        if r.status_code != 200:
-            return f"Could not fetch rate. Status: {r.status_code}"
-        data = r.json()
-        if data.get("result") != "success":
-            return f"API error: {data.get('error-type', 'unknown')}"
-        rates = data.get("rates", {})
-        if to_currency not in rates:
-            return f"Currency {to_currency} not found."
-        rate = rates[to_currency]
-        if to_currency == "IRR":
-            toman = rate / 10
-            return f"1 {from_currency} = {rate:,.0f} IRR = {toman:,.0f} تومان"
-        return f"1 {from_currency} = {rate:,.2f} {to_currency}"
-    except Exception as e:
-        return f"Currency error: {e}"
-
-
-TOOLS = [
-    {
-        "type": "function",
-        "name": "get_current_time",
-        "description": "Returns current time in Tehran timezone. Use when user asks 'ساعت چنده؟', 'what time is it?', or anything about time.",
-        "parameters": {"type": "object", "properties": {}, "required": []}
-    },
-    {
-        "type": "function",
-        "name": "get_current_date",
-        "description": "Returns today's date in both Gregorian and Jalali (Shamsi). Use for 'امروز چندمه؟', 'تاریخ امروز', 'what's today's date?'.",
-        "parameters": {"type": "object", "properties": {}, "required": []}
-    },
-    {
-        "type": "function",
-        "name": "get_day_of_week",
-        "description": "Returns today's day of the week in Persian. Use for 'امروز چه روزیه؟', 'what day is it?'.",
-        "parameters": {"type": "object", "properties": {}, "required": []}
-    },
-    {
-        "type": "function",
-        "name": "get_weather",
-        "description": "Returns current weather (temperature, conditions, humidity) for a city. Use for weather questions. If no city given, uses Tehran.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "city": {
-                    "type": "string",
-                    "description": "City name in English, e.g. 'Tehran', 'Mashhad', 'London'. Defaults to Tehran."
-                }
-            },
-            "required": []
-        }
-    },
-    {
-        "type": "function",
-        "name": "get_currency_rate",
-        "description": "Returns exchange rate between two currencies. Use for 'دلار چنده؟', 'یورو به تومان', 'USD to IRR'. For Iranian Toman, use 'IRR' as target and divide by 10 in your answer.",
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "from_currency": {
-                    "type": "string",
-                    "description": "Source currency code (USD, EUR, GBP, AED, TRY...). Default: USD"
-                },
-                "to_currency": {
-                    "type": "string",
-                    "description": "Target currency code (IRR for Rial, USD, EUR...). Default: IRR"
-                }
-            },
-            "required": []
-        }
-    },
-]
-
-TOOL_FUNCTIONS = {
-    "get_current_time": get_current_time,
-    "get_current_date": get_current_date,
-    "get_day_of_week": get_day_of_week,
-    "get_weather": get_weather,
-    "get_currency_rate": get_currency_rate,
-}
 
 # ============ GitHub Memory ============
 def github_headers():
@@ -451,68 +290,21 @@ async def ask_gemini(prompt):
     for attempt in range(2):
         for model_name in MODELS:
             try:
-                # ابزارها: هم Google Search (اگه فعال باشه) و هم توابع سفارشی
-                tools_list = []
-                if ENABLE_SEARCH:
-                    tools_list.append(types.Tool(google_search=types.GoogleSearch()))
-                if TOOLS:
-                    tools_list.append(types.Tool(function_declarations=[
-                        types.FunctionDeclaration(**t) for t in TOOLS
-                    ]))
-                
-                config = types.GenerateContentConfig(tools=tools_list) if tools_list else None
-                
-                try:
-                    result = ai.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=config,
-                    )
-                except Exception as tool_err:
-                    print(f"⚠️ Tools not supported by {model_name}, trying without: {str(tool_err)[:80]}")
-                    result = ai.models.generate_content(model=model_name, contents=prompt)
-                
-                # چک کن آیا AI می‌خواد تابعی رو صدا بزنه
-                called_function = False
-                if hasattr(result, "function_calls") and result.function_calls:
-                    for call in result.function_calls:
-                        func_name = call.name
-                        if func_name in TOOL_FUNCTIONS:
-                            print(f"🔧 Calling tool: {func_name} args={dict(call.args) if call.args else {}}")
-                            try:
-                                args = dict(call.args) if call.args else {}
-                                tool_result = TOOL_FUNCTIONS[func_name](**args)
-                            except Exception as e:
-                                tool_result = f"Tool error: {e}"
-                            print(f"🔧 Tool result: {tool_result}")
-                            
-                            followup = (
-                                f"{prompt}\n\n"
-                                f"[Tool '{func_name}' returned: {tool_result}]\n\n"
-                                f"Now answer the user naturally based on this. "
-                                f"Never mention tool names or that you called a tool. "
-                                f"Just use the info to answer."
-                            )
-                            result2 = ai.models.generate_content(
-                                model=model_name,
-                                contents=followup,
-                            )
-                            raw = (result2.text or "").strip()
-                            called_function = True
-                            break
-                
-                if not called_function:
-                    raw = (result.text or "").strip()
-                
-                print(f"✅ Response from {model_name}")
-                return raw, None
+                result = ai.models.generate_content(model=model_name, contents=prompt)
+                raw = (result.text or "").strip()
+                if raw:
+                    print(f"✅ Response from {model_name}")
+                    return raw, None
+                else:
+                    print(f"⚠️ Empty response from {model_name}, trying next...")
+                    continue
             except Exception as e:
                 last_error = e
                 err_str = str(e)
                 if "503" in err_str or "UNAVAILABLE" in err_str:
                     print(f"⏳ {model_name} busy, trying next...")
                 else:
-                    print(f"❌ Gemini error with {model_name}:", err_str[:150])
+                    print(f"❌ Gemini error with {model_name}:", err_str[:200])
                 continue
         if attempt == 0:
             print("⏸️ All models busy — waiting 3s before retry...")
@@ -870,8 +662,6 @@ async def main():
     print(f"📚 {len(memory.get('learned_facts', {}))} facts | 💬 {len(memory.get('conversations', {}))} convos")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
-    print(f"🛠️ Tools: {list(TOOL_FUNCTIONS.keys())}")
-    print(f"🔍 Web Search: {'enabled' if ENABLE_SEARCH else 'disabled'}")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
