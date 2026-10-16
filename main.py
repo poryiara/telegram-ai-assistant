@@ -12,6 +12,7 @@ from google import genai
 from google.genai import types
 import edge_tts
 from ddgs import DDGS
+from bs4 import BeautifulSoup
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
@@ -20,6 +21,7 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 OWNER_ID = int(os.environ["OWNER_ID"])
 OWNER_NAME = os.environ.get("OWNER_NAME", "Poryia")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+SCRAPERAPI_KEY = os.environ.get("SCRAPERAPI_KEY", "")
 
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
@@ -31,7 +33,6 @@ MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
-# فقط مدل‌های موجود
 MODELS = [
     "gemini-3.8-flash",
     "gemini-3.6-flash",
@@ -215,6 +216,14 @@ DO NOT save in these cases: normal conversation, questions, jokes, small talk.
 
 When in doubt, DO NOT save.
 
+=== WEB TOOLS ===
+You have two tools:
+- web_search: for general info, news, prices, weather, time, dates
+- scrape_url: for reading the full content of a specific URL
+
+Use web_search whenever the owner asks about prices, news, time, dates, or anything that might have changed.
+Use scrape_url when the owner gives you a link to read.
+
 {vblock}
 
 CRITICAL: Voice tags ([ENABLE_VOICE]/[DISABLE_VOICE]) go AFTER the [IMPORTANT]/[NORMAL] tag,
@@ -254,6 +263,32 @@ If a regular user tries to teach you something, DECLINE politely.
 
 ⚠️ EXCEPTION: Asking for VOICE messages is NOT teaching.
 
+=== WEB TOOLS (VERY IMPORTANT) ===
+You have two tools:
+- web_search: search the web for current info
+- scrape_url: read the full content of a specific URL
+
+⚠️ NEVER say "من نمی‌دونم" or "قیمت ندارم" for:
+- Current prices (دلار، یورو، بیت‌کوین، طلا، سکه)
+- Current time or date ("ساعت چنده؟"، "امروز چندمه؟")
+- News, weather, sports results, or events
+- Anything that might have changed since your training
+
+ALWAYS use web_search first, then answer.
+
+Examples:
+User: "قیمت دلار رو بگو"
+→ call web_search("قیمت دلار امروز")
+→ Then reply with the actual price.
+
+User: "ساعت چنده؟"
+→ call web_search("ساعت الان تهران")
+→ Then reply with the time.
+
+User: "این لینک رو بخون: https://example.com"
+→ call scrape_url("https://example.com")
+→ Then summarize it.
+
 {vblock}
 
 CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
@@ -279,17 +314,49 @@ def web_search(query: str, max_results: int = 5) -> str:
     except Exception as e:
         return f"Search error: {e}"
 
-# تعریف ابزار برای Gemini (manual function calling)
+# ============ ScraperAPI ============
+def scrape_url(url: str) -> str:
+    """Fetch and extract text from a URL using ScraperAPI."""
+    if not SCRAPERAPI_KEY:
+        return "ScraperAPI key not configured."
+    try:
+        payload = {
+            "api_key": SCRAPERAPI_KEY,
+            "url": url,
+            "render": "true",
+        }
+        r = requests.get("https://api.scraperapi.com/", params=payload, timeout=45)
+        if r.status_code != 200:
+            return f"ScraperAPI error: {r.status_code} - {r.text[:200]}"
+        
+        soup = BeautifulSoup(r.text, "html.parser")
+        
+        for tag in soup(["script", "style", "nav", "footer", "header", "aside"]):
+            tag.decompose()
+        
+        text = soup.get_text(separator="\n", strip=True)
+        
+        if len(text) > 8000:
+            text = text[:8000] + "...\n[متن طولانی بود، خلاصه شد]"
+        
+        if len(text) < 50:
+            return "صفحه محتوای قابل خواندنی نداشت."
+        
+        return text
+    except Exception as e:
+        return f"Scrape error: {e}"
+
+# ============ تعریف ابزارها ============
 SEARCH_TOOL = types.Tool(function_declarations=[
     types.FunctionDeclaration(
         name="web_search",
-        description="جستجو در وب برای اطلاعات به‌روز. از این استفاده کن وقتی کاربر درباره اخبار، قیمت لحظه‌ای (دلار، طلا، بیت‌کوین)، هوا، ساعت، تاریخ، نتایج مسابقات، یا هر چیزی که ممکنه تغییر کرده باشه می‌پرسه. حتماً برای قیمت‌ها و اخبار از این ابزار استفاده کن.",
+        description="جستجو در وب برای اطلاعات به‌روز. برای اخبار، قیمت لحظه‌ای (دلار، طلا، بیت‌کوین)، هوا، ساعت، تاریخ، نتایج مسابقات، یا هر چیزی که ممکنه تغییر کرده باشه استفاده کن.",
         parameters={
             "type": "object",
             "properties": {
                 "query": {
                     "type": "string",
-                    "description": "عبارت جستجو. برای اخبار و قیمت‌ها به فارسی یا انگلیسی جستجو کن."
+                    "description": "عبارت جستجو. برای اخبار و قیمت‌ها به فارسی یا انگلیسی."
                 },
                 "max_results": {
                     "type": "integer",
@@ -301,53 +368,91 @@ SEARCH_TOOL = types.Tool(function_declarations=[
     )
 ])
 
+SCRAPE_TOOL = types.Tool(function_declarations=[
+    types.FunctionDeclaration(
+        name="scrape_url",
+        description="دریافت محتوای کامل یک صفحه وب. وقتی کاربر یه لینک فرستاد و می‌خوای محتواش رو بخونی، از این ابزار استفاده کن.",
+        parameters={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "آدرس کامل صفحه وب (مثل https://example.com/page)"
+                }
+            },
+            "required": ["url"]
+        }
+    )
+])
+
+ALL_TOOLS = [SEARCH_TOOL, SCRAPE_TOOL]
+
 async def ask_gemini(prompt):
     raw = None
     last_error = None
     for attempt in range(2):
         for model_name in MODELS:
             try:
-                # مرحله 1: درخواست با ابزار
                 try:
                     result = ai.models.generate_content(
                         model=model_name,
                         contents=prompt,
-                        config=types.GenerateContentConfig(tools=[SEARCH_TOOL])
+                        config=types.GenerateContentConfig(tools=ALL_TOOLS)
                     )
                 except Exception as tool_err:
                     print(f"⚠️ Tools not supported by {model_name}: {str(tool_err)[:100]}")
                     result = ai.models.generate_content(model=model_name, contents=prompt)
                 
-                # چک کن آیا AI می‌خواد web_search صدا بزنه
-                called_search = False
+                called_tool = False
+                
                 if hasattr(result, "function_calls") and result.function_calls:
                     for call in result.function_calls:
+                        args = dict(call.args) if call.args else {}
+                        
                         if call.name == "web_search":
-                            args = dict(call.args) if call.args else {}
                             query = args.get("query", "")
                             max_results = args.get("max_results", 5)
                             print(f"🔍 Searching: {query}")
-                            search_result = web_search(query, max_results)
-                            print(f"🔍 Search done ({len(search_result)} chars)")
+                            tool_result = web_search(query, max_results)
+                            print(f"🔍 Search done ({len(tool_result)} chars)")
                             
-                            # نتیجه رو دوباره به AI بده
                             followup = (
                                 f"{prompt}\n\n"
-                                f"[نتیجه جستجو برای «{query}»:\n{search_result}]\n\n"
+                                f"[نتیجه جستجو برای «{query}»:\n{tool_result}]\n\n"
                                 f"حالا بر اساس این نتایج، به کاربر جواب بده. "
                                 f"هرگز نگو که جستجو کردی یا ابزار داری. "
-                                f"مستقیم جواب بده، انگار که خودت این اطلاعات رو می‌دونی. "
-                                f"اگه از نتایج عدد یا قیمت خاصی پیدا کردی، همون رو بگو."
+                                f"مستقیم جواب بده. اگه عدد یا قیمت خاصی توی نتایج بود، همون رو بگو."
                             )
                             result2 = ai.models.generate_content(
                                 model=model_name,
                                 contents=followup
                             )
                             raw = (result2.text or "").strip()
-                            called_search = True
+                            called_tool = True
+                            break
+                        
+                        elif call.name == "scrape_url":
+                            url = args.get("url", "")
+                            print(f"📄 Scraping: {url}")
+                            tool_result = scrape_url(url)
+                            print(f"📄 Scraped {len(tool_result)} chars")
+                            
+                            followup = (
+                                f"{prompt}\n\n"
+                                f"[محتوای صفحه «{url}»:\n{tool_result}]\n\n"
+                                f"حالا بر اساس این محتوا، به کاربر جواب بده. "
+                                f"هرگز نگو که اسکرپ کردی یا ابزار داری. "
+                                f"مستقیم جواب بده."
+                            )
+                            result2 = ai.models.generate_content(
+                                model=model_name,
+                                contents=followup
+                            )
+                            raw = (result2.text or "").strip()
+                            called_tool = True
                             break
                 
-                if not called_search:
+                if not called_tool:
                     raw = (result.text or "").strip()
                 
                 if raw:
@@ -723,7 +828,8 @@ async def main():
     print(f"📚 {len(memory.get('learned_facts', {}))} facts | 💬 {len(memory.get('conversations', {}))} convos")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
-    print(f"🔍 Web Search: enabled (DuckDuckGo, manual)")
+    print(f"🔍 Web Search: enabled (DuckDuckGo)")
+    print(f"📄 ScraperAPI: {'enabled' if SCRAPERAPI_KEY else 'DISABLED (no key)'}")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
