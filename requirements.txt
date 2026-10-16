@@ -3,3 +3,4 @@ google-genai
 requests
 edge-tts
 ddgs
+beautifulsoup4
