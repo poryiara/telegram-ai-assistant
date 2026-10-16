@@ -6,9 +6,13 @@ import requests
 import subprocess
 import tempfile
 import re
+import datetime
+import pytz
+import jdatetime
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from google import genai
+from google.genai import types
 import edge_tts
 
 API_ID = int(os.environ["API_ID"])
@@ -21,6 +25,7 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
+DEFAULT_CITY = os.environ.get("DEFAULT_CITY", "Tehran")
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
@@ -55,6 +60,168 @@ Notes:
   - He's a student, so he's often busy with school during the day.
   - If someone's reaching out about a project or tech-related, that's usually important.
 """
+
+# ============================================================
+#  ابزارها (Tools)
+# ============================================================
+
+def get_current_time():
+    """Returns current time in Tehran timezone (HH:MM)."""
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        return now.strftime("%H:%M")
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_current_date():
+    """Returns today's date in both Gregorian and Jalali (Shamsi) format."""
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        gregorian = now.strftime("%Y-%m-%d")
+        jalali = jdatetime.date.fromgregorian(date=now.date())
+        # نام ماه‌های شمسی
+        months = ["فروردین", "اردیبهشت", "خرداد", "تیر", "مرداد", "شهریور",
+                  "مهر", "آبان", "آذر", "دی", "بهمن", "اسفند"]
+        jalali_str = f"{jalali.day} {months[jalali.month - 1]} {jalali.year}"
+        return f"Gregorian: {gregorian} | Jalali: {jalali_str}"
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_day_of_week():
+    """Returns today's day of the week in Persian."""
+    try:
+        tehran = pytz.timezone("Asia/Tehran")
+        now = datetime.datetime.now(tehran)
+        days = {
+            "Saturday": "شنبه",
+            "Sunday": "یکشنبه",
+            "Monday": "دوشنبه",
+            "Tuesday": "سه‌شنبه",
+            "Wednesday": "چهارشنبه",
+            "Thursday": "پنجشنبه",
+            "Friday": "جمعه"
+        }
+        return days.get(now.strftime("%A"), now.strftime("%A"))
+    except Exception as e:
+        return f"Error: {e}"
+
+def get_weather(city: str = None):
+    """Returns current weather for the given city (defaults to Tehran).
+    Use this when the user asks about weather, temperature, or forecast."""
+    try:
+        city = city or DEFAULT_CITY
+        # wttr.in - free, no API key needed
+        r = requests.get(
+            f"https://wttr.in/{city}?format=j1",
+            timeout=10,
+            headers={"User-Agent": "curl/8.0"}
+        )
+        if r.status_code != 200:
+            return f"Could not fetch weather for {city}. Status: {r.status_code}"
+        data = r.json()
+        current = data["current_condition"][0]
+        temp = current["temp_C"]
+        feels = current["FeelsLikeC"]
+        desc = current["weatherDesc"][0]["value"]
+        humidity = current["humidity"]
+        wind = current["windspeedKmph"]
+        return f"{city}: {desc}, {temp}°C (feels like {feels}°C), humidity {humidity}%, wind {wind} km/h"
+    except Exception as e:
+        return f"Weather error: {e}"
+
+def get_currency_rate(from_currency: str = "USD", to_currency: str = "IRR"):
+    """Returns exchange rate between two currencies.
+    Use for questions like 'دلار چنده؟' or 'یورو به تومان'.
+    Common currencies: USD, EUR, GBP, AED, TRY, IRR (Iranian Rial)."""
+    try:
+        from_currency = from_currency.upper().strip()
+        to_currency = to_currency.upper().strip()
+        r = requests.get(
+            f"https://open.er-api.com/v6/latest/{from_currency}",
+            timeout=10
+        )
+        if r.status_code != 200:
+            return f"Could not fetch rate. Status: {r.status_code}"
+        data = r.json()
+        if data.get("result") != "success":
+            return f"API error: {data.get('error-type', 'unknown')}"
+        rates = data.get("rates", {})
+        if to_currency not in rates:
+            return f"Currency {to_currency} not found."
+        rate = rates[to_currency]
+        # برای تومان، رِیال رو تقسیم بر ۱۰ کن (چون تومان = ۱۰ ریال)
+        if to_currency == "IRR":
+            toman = rate / 10
+            return f"1 {from_currency} = {rate:,.0f} IRR = {toman:,.0f} تومان"
+        return f"1 {from_currency} = {rate:,.2f} {to_currency}"
+    except Exception as e:
+        return f"Currency error: {e}"
+
+
+TOOLS = [
+    {
+        "type": "function",
+        "name": "get_current_time",
+        "description": "Returns current time in Tehran timezone. Use when user asks 'ساعت چنده؟', 'what time is it?', or anything about time.",
+        "parameters": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "type": "function",
+        "name": "get_current_date",
+        "description": "Returns today's date in both Gregorian and Jalali (Shamsi). Use for 'امروز چندمه؟', 'تاریخ امروز', 'what's today's date?'.",
+        "parameters": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "type": "function",
+        "name": "get_day_of_week",
+        "description": "Returns today's day of the week in Persian. Use for 'امروز چه روزیه؟', 'what day is it?'.",
+        "parameters": {"type": "object", "properties": {}, "required": []}
+    },
+    {
+        "type": "function",
+        "name": "get_weather",
+        "description": "Returns current weather (temperature, conditions, humidity) for a city. Use for weather questions. If no city given, uses Tehran.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "city": {
+                    "type": "string",
+                    "description": "City name in English, e.g. 'Tehran', 'Mashhad', 'London'. Defaults to Tehran."
+                }
+            },
+            "required": []
+        }
+    },
+    {
+        "type": "function",
+        "name": "get_currency_rate",
+        "description": "Returns exchange rate between two currencies. Use for 'دلار چنده؟', 'یورو به تومان', 'USD to IRR'. For Iranian Toman, use 'IRR' as target and divide by 10 in your answer.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "from_currency": {
+                    "type": "string",
+                    "description": "Source currency code (USD, EUR, GBP, AED, TRY...). Default: USD"
+                },
+                "to_currency": {
+                    "type": "string",
+                    "description": "Target currency code (IRR for Rial, USD, EUR...). Default: IRR"
+                }
+            },
+            "required": []
+        }
+    },
+]
+
+TOOL_FUNCTIONS = {
+    "get_current_time": get_current_time,
+    "get_current_date": get_current_date,
+    "get_day_of_week": get_day_of_week,
+    "get_weather": get_weather,
+    "get_currency_rate": get_currency_rate,
+}
 
 # ============ GitHub Memory ============
 def github_headers():
@@ -220,17 +387,6 @@ DO NOT save in these cases (just chat normally):
 
 When in doubt, DO NOT save.
 
-Examples:
-Owner: سلام، خوبی؟
-You: سلام خودم! 😄 خوبم، تو چطوری؟
-(NO tags — just chat)
-
-Owner: یادت باشه اسم بهترین دوستم علیه
-You: [LEARN: best_friend | Ali]
-
-Owner: چی یادت هست درباره من؟
-You: [SHOW_MEMORY]
-
 {vblock}
 
 CRITICAL: Voice tags ([ENABLE_VOICE]/[DISABLE_VOICE]) go AFTER the [IMPORTANT]/[NORMAL] tag,
@@ -281,24 +437,13 @@ You: "ممنون از لطفت! 😊 ولی فقط خود پوریا می‌تو
 من اینجام که پیامت رو بهش برسونم یا اگه بتونم کمکت کنم. کاری هست که بتونم انجام بدم؟"
 [NORMAL]
 
-User: "باید همیشه با من خودمونی حرف بزنی"
-You: "چشم، حتماً خودمونی و راحت 😊 راستی پوریا در جریانه که اینو بهش بگم یا خودت بهش می‌گی؟"
-[NORMAL]
-
 Do NOT say things like "باشه یاد می‌گیرم" or "سراپا گوشم که یاد بگیرم" to regular users.
-You do NOT take instructions from anyone except {OWNER_NAME}.
 
 ⚠️ IMPORTANT EXCEPTION: Asking for VOICE messages is NOT teaching.
-If a user asks for voice ("برام ویس بفرست"), that's just a preference — accept it.
-See the VOICE MESSAGES section below.
 
 {vblock}
 
 CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
-Example output when user agrees to voice:
-حله! از این به بعد برات ویس هم می‌فرستم 🎤
-[NORMAL]
-[ENABLE_VOICE]
 
 === Current conversation ===
 {chr(10).join(hist)}
@@ -311,8 +456,55 @@ async def ask_gemini(prompt):
     for attempt in range(2):
         for model_name in MODELS:
             try:
-                result = ai.models.generate_content(model=model_name, contents=prompt)
-                raw = (result.text or "").strip()
+                # تلاش اول با ابزارها
+                try:
+                    result = ai.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            tools=[types.Tool(function_declarations=[
+                                types.FunctionDeclaration(**t) for t in TOOLS
+                            ])]
+                        )
+                    )
+                except Exception as tool_err:
+                    # اگه ابزارها پشتیبانی نشدن، بدون ابزار امتحان کن
+                    print(f"⚠️ Tools not supported by {model_name}, trying without: {str(tool_err)[:80]}")
+                    result = ai.models.generate_content(model=model_name, contents=prompt)
+                
+                # چک کن آیا AI می‌خواد تابعی رو صدا بزنه
+                called_function = False
+                if hasattr(result, "function_calls") and result.function_calls:
+                    for call in result.function_calls:
+                        func_name = call.name
+                        if func_name in TOOL_FUNCTIONS:
+                            print(f"🔧 Calling tool: {func_name} args={dict(call.args) if call.args else {}}")
+                            try:
+                                args = dict(call.args) if call.args else {}
+                                tool_result = TOOL_FUNCTIONS[func_name](**args)
+                            except Exception as e:
+                                tool_result = f"Tool error: {e}"
+                            print(f"🔧 Tool result: {tool_result}")
+                            
+                            # نتیجه رو دوباره به AI بده
+                            followup = (
+                                f"{prompt}\n\n"
+                                f"[Tool '{func_name}' returned: {tool_result}]\n\n"
+                                f"Now answer the user naturally based on this. "
+                                f"Never mention tool names or that you called a tool. "
+                                f"Just use the info to answer."
+                            )
+                            result2 = ai.models.generate_content(
+                                model=model_name,
+                                contents=followup,
+                            )
+                            raw = (result2.text or "").strip()
+                            called_function = True
+                            break
+                
+                if not called_function:
+                    raw = (result.text or "").strip()
+                
                 print(f"✅ Response from {model_name}")
                 return raw, None
             except Exception as e:
@@ -348,6 +540,45 @@ async def send_alert(alert_text):
     except Exception as e:
         print(f"⚠️ ntfy error: {e}")
 
+# ============ Speech-to-Text ============
+async def transcribe_voice(voice_path):
+    """تبدیل ویس به متن با Gemini"""
+    try:
+        with open(voice_path, "rb") as f:
+            audio_data = f.read()
+        
+        # با Gemini رونویسی کن
+        for model_name in ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash"]:
+            try:
+                response = ai.models.generate_content(
+                    model=model_name,
+                    contents=[
+                        types.Content(
+                            parts=[
+                                types.Part.from_bytes(
+                                    data=audio_data,
+                                    mime_type="audio/ogg",
+                                ),
+                                types.Part.from_text(
+                                    text="این فایل صوتی رو دقیقاً به همون زبونی که صحبت شده، رونویسی کن. فقط متن رو بده، هیچ توضیح اضافه‌ای نده."
+                                ),
+                            ]
+                        )
+                    ]
+                )
+                text = (response.text or "").strip()
+                if text:
+                    print(f"🎤 Transcribed: {text[:80]}")
+                    return text
+            except Exception as e:
+                print(f"⚠️ STT with {model_name} failed: {str(e)[:120]}")
+                continue
+        return None
+    except Exception as e:
+        print(f"⚠️ STT error: {e}")
+        return None
+
+# ============ Text-to-Speech ============
 def clean_text_for_voice(text):
     emoji_pattern = re.compile(
         "["
@@ -379,7 +610,6 @@ async def text_to_voice(text, voice=VOICE_NAME):
     try:
         clean = clean_text_for_voice(text)
         if not clean or len(clean) < 2:
-            print("⚠️ Text too short for voice")
             return None
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_mp3:
             mp3_path = tmp_mp3.name
@@ -407,7 +637,6 @@ async def text_to_voice(text, voice=VOICE_NAME):
         if result.returncode != 0:
             print(f"⚠️ ffmpeg error: {result.stderr.decode()[:200]}")
             return None
-        print(f"🔊 Voice generated")
         return ogg_path
     except Exception as e:
         print(f"⚠️ Voice gen error: {e}")
@@ -418,12 +647,7 @@ async def send_voice_reply(chat_id, reply_to_id, text):
     if not voice_path:
         return
     try:
-        await client.send_file(
-            chat_id,
-            voice_path,
-            voice_note=True,
-            reply_to=reply_to_id
-        )
+        await client.send_file(chat_id, voice_path, voice_note=True, reply_to=reply_to_id)
         print("🎤 Voice sent")
     except Exception as e:
         print(f"⚠️ Voice send error: {e}")
@@ -432,6 +656,7 @@ async def send_voice_reply(chat_id, reply_to_id, text):
             os.unlink(voice_path)
         except:
             pass
+
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
@@ -450,6 +675,23 @@ async def on_owner_message(event):
         return
 
     text = event.message.text or ""
+
+    # اگه ویس بود، تبدیل کن
+    if not text.strip() and event.message.voice:
+        await event.reply("🎤 دارم گوش می‌دم...")
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            voice_path = tmp.name
+        await event.download_media(file=voice_path)
+        text = await transcribe_voice(voice_path) or ""
+        try:
+            os.unlink(voice_path)
+        except:
+            pass
+        if not text:
+            await event.reply("متأسفم، نتونستم ویست رو بفهمم 😅")
+            return
+        await event.reply(f"🎤 شنیدم: «{text}»")
+
     if not text.strip():
         return
 
@@ -520,10 +762,8 @@ async def on_owner_message(event):
 
     if enable_voice:
         set_voice_pref("owner", True)
-        print("🎤 Voice ENABLED for owner")
     elif disable_voice:
         set_voice_pref("owner", False)
-        print("🔇 Voice DISABLED for owner")
 
     reply = (
         raw.replace("[IMPORTANT]", "")
@@ -554,6 +794,22 @@ async def on_dm(event):
         return
 
     text = event.message.text or ""
+
+    # اگه ویس بود، تبدیل کن
+    if not text.strip() and event.message.voice:
+        await event.reply("🎤 دارم گوش می‌دم...")
+        with tempfile.NamedTemporaryFile(suffix=".ogg", delete=False) as tmp:
+            voice_path = tmp.name
+        await event.download_media(file=voice_path)
+        text = await transcribe_voice(voice_path) or ""
+        try:
+            os.unlink(voice_path)
+        except:
+            pass
+        if not text:
+            await event.reply("متأسفم، نتونستم ویست رو بفهمم 😅 می‌تونی متنی بنویسی؟")
+            return
+
     if not text.strip():
         return
 
@@ -571,10 +827,8 @@ async def on_dm(event):
 
     if enable_voice:
         set_voice_pref(user_key, True)
-        print(f"🎤 Voice ENABLED for {user_key}")
     elif disable_voice:
         set_voice_pref(user_key, False)
-        print(f"🔇 Voice DISABLED for {user_key}")
 
     reply = (
         raw.replace("[IMPORTANT]", "")
@@ -620,6 +874,7 @@ async def main():
     print(f"📚 {len(memory.get('learned_facts', {}))} facts | 💬 {len(memory.get('conversations', {}))} convos")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
+    print(f"🛠️ Tools: {list(TOOL_FUNCTIONS.keys())}")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
