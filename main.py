@@ -30,12 +30,29 @@ MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
+# ترتیب از قوی‌ترین به ضعیف‌ترین
 MODELS = [
+    "gemini-3.8-flash",        # قوی‌ترین
+    "gemini-3.7-flash",
+    "gemini-3.6-flash",
+    "gemini-3.5-flash",
+    "gemini-3-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",   # ضعیف‌ترین (ولی سقف بالا)
+]
+
+# ترتیب برای STT (ویس ورودی)
+STT_MODELS = [
     "gemini-3.8-flash",
+    "gemini-3.7-flash",
     "gemini-3.6-flash",
     "gemini-3.5-flash",
     "gemini-3.5-flash-lite",
+    "gemini-3.1-flash-lite",
 ]
+
+# تأخیر بین تلاش‌های مجدد (ثانیه)
+RETRY_DELAY = 0.5
 
 OWNER_INFO_BASE = """
 Name: Poryia Rahmani
@@ -264,34 +281,48 @@ You:"""
     return prompt
 
 async def ask_gemini(prompt):
+    """فراخوانی Gemini با fallback بین مدل‌ها (بدون تأخیر غیرضروری)"""
     raw = None
     last_error = None
-    for attempt in range(2):
-        for model_name in MODELS:
-            try:
-                result = ai.models.generate_content(model=model_name, contents=prompt)
-                raw = (result.text or "").strip()
-                if raw:
-                    print(f"✅ Response from {model_name}")
-                    return raw, None
-                else:
-                    print(f"⚠️ Empty response from {model_name}, trying next...")
-                    continue
-            except Exception as e:
-                last_error = e
-                err_str = str(e)
-                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    print(f"⏸️ {model_name} quota exceeded, trying next...")
-                elif "503" in err_str or "UNAVAILABLE" in err_str:
-                    print(f"⏳ {model_name} busy, trying next...")
-                elif "404" in err_str or "NOT_FOUND" in err_str:
-                    print(f"❌ {model_name} not found, skipping...")
-                else:
-                    print(f"❌ Gemini error with {model_name}:", err_str[:200])
+
+    # دور اول: سریع همه‌ی مدل‌ها رو امتحان کن
+    for model_name in MODELS:
+        try:
+            result = ai.models.generate_content(model=model_name, contents=prompt)
+            raw = (result.text or "").strip()
+            if raw:
+                print(f"✅ {model_name}")
+                return raw, None
+            else:
+                print(f"⚠️ empty from {model_name}")
                 continue
-        if attempt == 0:
-            print("⏸️ All models busy — waiting 3s before retry...")
-            await asyncio.sleep(3)
+        except Exception as e:
+            last_error = e
+            err_str = str(e)
+            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                print(f"⏸️ {model_name}: quota")
+            elif "503" in err_str or "UNAVAILABLE" in err_str:
+                print(f"⏳ {model_name}: busy")
+            elif "404" in err_str or "NOT_FOUND" in err_str:
+                print(f"❌ {model_name}: not found")
+            else:
+                print(f"❌ {model_name}: {err_str[:80]}")
+            continue
+
+    # دور دوم: فقط یه بار دیگه بعد از تأخیر کوتاه
+    print(f"⏸️ retrying in {RETRY_DELAY}s...")
+    await asyncio.sleep(RETRY_DELAY)
+    for model_name in MODELS:
+        try:
+            result = ai.models.generate_content(model=model_name, contents=prompt)
+            raw = (result.text or "").strip()
+            if raw:
+                print(f"✅ {model_name} (retry)")
+                return raw, None
+        except Exception as e:
+            last_error = e
+            continue
+
     return None, last_error
 
 async def send_alert(alert_text):
@@ -322,10 +353,10 @@ async def transcribe_voice(voice_path):
             audio_data = f.read()
 
         if len(audio_data) < 100:
-            print("⚠️ Audio file too small")
+            print("⚠️ Audio too small")
             return None
 
-        for model_name in ["gemini-3.8-flash", "gemini-3.6-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]:
+        for model_name in STT_MODELS:
             try:
                 response = ai.models.generate_content(
                     model=model_name,
@@ -337,7 +368,7 @@ async def transcribe_voice(voice_path):
                                     mime_type="audio/ogg",
                                 ),
                                 types.Part.from_text(
-                                    text="این فایل صوتی رو دقیقاً به همون زبونی که صحبت شده، رونویسی کن. فقط متن رو بده، هیچ توضیح یا اضافه‌ای نکن."
+                                    text="این فایل صوتی رو دقیقاً به همون زبونی که صحبت شده، رونویسی کن. فقط متن رو بده."
                                 ),
                             ]
                         )
@@ -345,10 +376,16 @@ async def transcribe_voice(voice_path):
                 )
                 text = (response.text or "").strip()
                 if text:
-                    print(f"🎤 Transcribed ({model_name}): {text[:80]}")
+                    print(f"🎤 STT: {model_name}")
                     return text
             except Exception as e:
-                print(f"⚠️ STT with {model_name} failed: {str(e)[:150]}")
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    print(f"⏸️ STT {model_name}: quota")
+                elif "503" in err_str or "UNAVAILABLE" in err_str:
+                    print(f"⏳ STT {model_name}: busy")
+                else:
+                    print(f"❌ STT {model_name}: {err_str[:80]}")
                 continue
         return None
     except Exception as e:
@@ -357,7 +394,7 @@ async def transcribe_voice(voice_path):
 
 
 async def handle_voice_input(event):
-    """دانلود ویس، تبدیل به متن، و پاسخ"""
+    """دانلود ویس، تبدیل به متن"""
     try:
         await event.reply("🎤 دارم گوش می‌دم...")
     except:
@@ -438,7 +475,6 @@ async def text_to_voice(text, voice=VOICE_NAME):
         if result.returncode != 0:
             print(f"⚠️ ffmpeg error: {result.stderr.decode()[:200]}")
             return None
-        print(f"🔊 Voice generated")
         return ogg_path
     except Exception as e:
         print(f"⚠️ Voice gen error: {e}")
@@ -471,24 +507,19 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 # ============ هندلر ادمین (فقط Saved Messages) ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_message(event):
-    # فقط Saved Messages
     try:
         me = await client.get_me()
     except Exception as e:
         print(f"⚠️ Owner check error: {e}")
         return
 
-    # چت باید دقیقاً Saved Messages باشه
     if event.chat_id != me.id:
         return
-
-    # و باید خودت فرستاده باشی
     if event.sender_id != me.id:
         return
 
     text = event.message.text or ""
 
-    # ==== اگه ویس بود، تبدیل به متن کن ====
     if not text.strip() and event.message.voice:
         text = await handle_voice_input(event) or ""
         if not text:
@@ -601,7 +632,6 @@ async def on_dm(event):
 
     text = event.message.text or ""
 
-    # ==== اگه ویس بود، تبدیل به متن کن ====
     if not text.strip() and event.message.voice:
         text = await handle_voice_input(event) or ""
         if not text:
@@ -678,6 +708,7 @@ async def main():
     print(f"🔊 Voice output: {VOICE_NAME}")
     print(f"🎙️ Voice input: enabled (Gemini STT)")
     print(f"🛡️ Owner handler: Saved Messages only")
+    print(f"🧠 Models: {len(MODELS)} (from strongest to weakest)")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
