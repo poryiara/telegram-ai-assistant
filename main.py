@@ -7,12 +7,15 @@ import subprocess
 import tempfile
 import re
 import time
+from collections import deque
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from google import genai
 from google.genai import types
+from aiohttp import web
 import edge_tts
 
+# ============ تنظیمات محیطی ============
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
@@ -20,17 +23,40 @@ GEMINI_API_KEY = os.environ["GEMINI_API_KEY"]
 OWNER_ID = int(os.environ["OWNER_ID"])
 OWNER_NAME = os.environ.get("OWNER_NAME", "Poryia")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
+API_KEY = os.environ.get("API_KEY", "changeme")
 
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
-
 PAUSE_DURATION = int(os.environ.get("PAUSE_DURATION", "1800"))
+PORT = int(os.environ.get("PORT", "8080"))
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
 GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
 
+# ============ تنظیمات قابل تغییر از اپ ============
+runtime_settings = {
+    "pause_enabled": True,
+    "pause_duration": PAUSE_DURATION,
+    "voice_output": True,
+    "voice_input": True,
+    "voice_name": VOICE_NAME,
+    "alert_delay": ALERT_DELAY,
+}
+
+# ============ لاگ زنده (آخرین ۱۰۰ رویداد) ============
+recent_logs = deque(maxlen=100)
+started_at = time.time()
+
+def log(message):
+    """لاگ هم توی کنسول هم توی حافظه"""
+    ts = time.strftime("%H:%M:%S")
+    entry = {"time": ts, "text": message}
+    recent_logs.append(entry)
+    print(f"{ts} {message}")
+
+# ============ Gemini Models ============
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELS = [
@@ -52,28 +78,7 @@ STT_MODELS = [
     "gemini-3.1-flash-lite",
 ]
 
-# حداکثر زمان تلاش برای جواب دادن (ثانیه)
-MAX_RETRY_TIME = 300  # 5 دقیقه
-# فاصله بین دورها (ثانیه) — هر دور بیشتر می‌شه
 RETRY_DELAYS = [0.5, 1, 2, 3, 5, 8, 13, 20, 30, 30, 30]
-
-# ============ کش pause ============
-owner_last_seen = {}
-
-def mark_owner_active(chat_id):
-    owner_last_seen[chat_id] = time.time()
-
-def is_owner_paused(chat_id):
-    last = owner_last_seen.get(chat_id, 0)
-    if last == 0:
-        return False
-    return (time.time() - last) < PAUSE_DURATION
-
-def pause_remaining(chat_id):
-    last = owner_last_seen.get(chat_id, 0)
-    if last == 0:
-        return 0
-    return max(0, int(PAUSE_DURATION - (time.time() - last)))
 
 OWNER_INFO_BASE = """
 Name: Poryia Rahmani
@@ -93,6 +98,26 @@ Notes:
   - If someone's reaching out about a project or tech-related, that's usually important.
 """
 
+# ============ کش pause ============
+owner_last_seen = {}
+
+def mark_owner_active(chat_id):
+    owner_last_seen[chat_id] = time.time()
+
+def is_owner_paused(chat_id):
+    if not runtime_settings["pause_enabled"]:
+        return False
+    last = owner_last_seen.get(chat_id, 0)
+    if last == 0:
+        return False
+    return (time.time() - last) < runtime_settings["pause_duration"]
+
+def pause_remaining(chat_id):
+    last = owner_last_seen.get(chat_id, 0)
+    if last == 0:
+        return 0
+    return max(0, int(runtime_settings["pause_duration"] - (time.time() - last)))
+
 # ============ GitHub Memory ============
 def github_headers():
     return {
@@ -103,7 +128,7 @@ def github_headers():
 def fetch_memory():
     empty = {"learned_facts": {}, "owner_notes": [], "voice_preferences": {}}
     if not GITHUB_TOKEN:
-        print("⚠️ No GITHUB_TOKEN")
+        log("⚠️ No GITHUB_TOKEN")
         return empty, None
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     try:
@@ -120,9 +145,9 @@ def fetch_memory():
         elif r.status_code == 404:
             return empty, None
         else:
-            print(f"⚠️ GitHub fetch: {r.status_code}")
+            log(f"⚠️ GitHub fetch: {r.status_code}")
     except Exception as e:
-        print(f"⚠️ GitHub fetch exception: {e}")
+        log(f"⚠️ GitHub fetch exception: {e}")
     return empty, None
 
 def push_memory(mem):
@@ -142,11 +167,11 @@ def push_memory(mem):
     try:
         r = requests.put(url, headers=github_headers(), json=payload, timeout=15)
         if r.status_code in (200, 201):
-            print("💾 Memory saved")
+            log("💾 Memory saved")
         else:
-            print(f"⚠️ GitHub push: {r.status_code}")
+            log(f"⚠️ GitHub push: {r.status_code}")
     except Exception as e:
-        print(f"⚠️ GitHub push exception: {e}")
+        log(f"⚠️ GitHub push exception: {e}")
 
 def save_memory_async():
     loop = asyncio.get_event_loop()
@@ -273,53 +298,44 @@ CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
 You:"""
     return prompt
 
-
 async def ask_gemini(prompt, chat_id=None):
-    """
-    فراخوانی Gemini با retry بی‌نهایت.
-    تا وقتی یه مدل جواب بده، ادامه می‌ده.
-    حین انتظار، typing نشون می‌ده.
-    """
     started = time.time()
     round_num = 0
     last_error = None
+    max_time = runtime_settings.get("max_retry_time", 300)
 
     while True:
         round_num += 1
-        # توی هر دور، همه‌ی مدل‌ها رو امتحان کن
         for model_name in MODELS:
             try:
                 result = ai.models.generate_content(model=model_name, contents=prompt)
                 raw = (result.text or "").strip()
                 if raw:
                     elapsed = int(time.time() - started)
-                    print(f"✅ {model_name} (round {round_num}, {elapsed}s)")
+                    log(f"✅ {model_name} (round {round_num}, {elapsed}s)")
                     return raw, None
             except Exception as e:
                 last_error = e
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    print(f"⏸️ {model_name}: quota")
+                    log(f"⏸️ {model_name}: quota")
                 elif "503" in err_str or "UNAVAILABLE" in err_str:
-                    print(f"⏳ {model_name}: busy")
+                    log(f"⏳ {model_name}: busy")
                 elif "404" in err_str or "NOT_FOUND" in err_str:
-                    print(f"❌ {model_name}: not found")
+                    log(f"❌ {model_name}: not found")
                 else:
-                    print(f"❌ {model_name}: {err_str[:80]}")
+                    log(f"❌ {model_name}: {err_str[:80]}")
                 continue
 
-        # چک کن از حد مجاز رد نشده باشیم
         elapsed = time.time() - started
-        if elapsed > MAX_RETRY_TIME:
-            print(f"⛔ Gave up after {int(elapsed)}s")
+        if elapsed > max_time:
+            log(f"⛔ Gave up after {int(elapsed)}s")
             return None, last_error
 
-        # تاخیر قبل از دور بعدی (افزایشی)
         delay_idx = min(round_num - 1, len(RETRY_DELAYS) - 1)
         delay = RETRY_DELAYS[delay_idx]
-        print(f"⏸️ Round {round_num} failed — retry in {delay}s...")
+        log(f"⏸️ Round {round_num} failed — retry in {delay}s...")
 
-        # نشون بده داره تایپ می‌کنه (تا کاربر بفهمه ربات داره کار می‌کنه)
         if chat_id:
             try:
                 await client.action(chat_id, "typing")
@@ -327,7 +343,6 @@ async def ask_gemini(prompt, chat_id=None):
                 pass
 
         await asyncio.sleep(delay)
-
 
 async def send_alert(alert_text):
     if not NTFY_TOPIC:
@@ -344,14 +359,14 @@ async def send_alert(alert_text):
             None,
             lambda: requests.post(url, data=alert_text.encode('utf-8'), headers=headers, timeout=10)
         )
-        print("🔔 Alert sent")
+        log("🔔 Alert sent")
     except Exception as e:
-        print(f"⚠️ ntfy error: {e}")
+        log(f"⚠️ ntfy error: {e}")
 
-# ============ Speech-to-Text ============
 async def transcribe_voice(voice_path):
     started = time.time()
     round_num = 0
+    max_time = runtime_settings.get("max_retry_time", 300)
     while True:
         round_num += 1
         try:
@@ -360,7 +375,7 @@ async def transcribe_voice(voice_path):
             if len(audio_data) < 100:
                 return None
         except Exception as e:
-            print(f"⚠️ File read error: {e}")
+            log(f"⚠️ File read error: {e}")
             return None
 
         for model_name in STT_MODELS:
@@ -378,25 +393,25 @@ async def transcribe_voice(voice_path):
                 )
                 text = (response.text or "").strip()
                 if text:
-                    print(f"🎤 STT: {model_name} (round {round_num})")
+                    log(f"🎤 STT: {model_name} (round {round_num})")
                     return text
             except Exception as e:
                 err_str = str(e)
                 if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                    print(f"⏸️ STT {model_name}: quota")
+                    log(f"⏸️ STT {model_name}: quota")
                 elif "503" in err_str or "UNAVAILABLE" in err_str:
-                    print(f"⏳ STT {model_name}: busy")
+                    log(f"⏳ STT {model_name}: busy")
                 else:
-                    print(f"❌ STT {model_name}: {err_str[:80]}")
+                    log(f"❌ STT {model_name}: {err_str[:80]}")
                 continue
 
         elapsed = time.time() - started
-        if elapsed > MAX_RETRY_TIME:
-            print(f"⛔ STT gave up after {int(elapsed)}s")
+        if elapsed > max_time:
+            log(f"⛔ STT gave up after {int(elapsed)}s")
             return None
 
         delay = RETRY_DELAYS[min(round_num - 1, len(RETRY_DELAYS) - 1)]
-        print(f"⏸️ STT round {round_num} failed — retry in {delay}s...")
+        log(f"⏸️ STT round {round_num} failed — retry in {delay}s...")
         await asyncio.sleep(delay)
 
 async def handle_voice_input(event):
@@ -419,7 +434,6 @@ async def handle_voice_input(event):
 
     return text
 
-# ============ Text-to-Speech ============
 def clean_text_for_voice(text):
     emoji_pattern = re.compile(
         "["
@@ -447,8 +461,9 @@ def clean_text_for_voice(text):
     text = re.sub(r"\s+", " ", text).strip()
     return text
 
-async def text_to_voice(text, voice=VOICE_NAME):
+async def text_to_voice(text, voice=None):
     try:
+        voice = voice or runtime_settings.get("voice_name", VOICE_NAME)
         clean = clean_text_for_voice(text)
         if not clean or len(clean) < 2:
             return None
@@ -474,22 +489,24 @@ async def text_to_voice(text, voice=VOICE_NAME):
         except:
             pass
         if result.returncode != 0:
-            print(f"⚠️ ffmpeg error")
+            log(f"⚠️ ffmpeg error")
             return None
         return ogg_path
     except Exception as e:
-        print(f"⚠️ Voice gen error: {e}")
+        log(f"⚠️ Voice gen error: {e}")
         return None
 
 async def send_voice_reply(chat_id, reply_to_id, text):
+    if not runtime_settings.get("voice_output", True):
+        return
     voice_path = await text_to_voice(text)
     if not voice_path:
         return
     try:
         await client.send_file(chat_id, voice_path, voice_note=True, reply_to=reply_to_id)
-        print("🎤 Voice sent")
+        log("🎤 Voice sent")
     except Exception as e:
-        print(f"⚠️ Voice send error: {e}")
+        log(f"⚠️ Voice send error: {e}")
     finally:
         try:
             os.unlink(voice_path)
@@ -500,23 +517,208 @@ async def send_voice_reply(chat_id, reply_to_id, text):
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
+# ============================================================
+#                       REST API
+# ============================================================
+
+def api_auth(request):
+    """چک API key"""
+    key = request.headers.get("X-API-Key") or request.query.get("api_key")
+    return key == API_KEY
+
+def json_response(data, status=200):
+    return web.json_response(data, status=status, headers={
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "X-API-Key, Content-Type",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    })
+
+async def handle_options(request):
+    return web.Response(headers={
+        "Access-Control-Allow-Origin": "*",
+        "Access-Control-Allow-Headers": "X-API-Key, Content-Type",
+        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    })
+
+async def api_status(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    try:
+        me = await client.get_me()
+        uptime = int(time.time() - started_at)
+        return json_response({
+            "online": True,
+            "user_id": me.id,
+            "username": me.username,
+            "first_name": me.first_name,
+            "uptime_seconds": uptime,
+            "facts_count": len(memory.get("learned_facts", {})),
+            "notes_count": len(memory.get("owner_notes", [])),
+            "voice_prefs_count": len(memory.get("voice_preferences", {})),
+            "paused_chats_count": sum(1 for cid in owner_last_seen if is_owner_paused(cid)),
+            "settings": runtime_settings,
+        })
+    except Exception as e:
+        return json_response({"error": str(e)}, 500)
+
+async def api_get_settings(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    return json_response({"settings": runtime_settings})
+
+async def api_update_settings(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    try:
+        data = await request.json()
+    except:
+        return json_response({"error": "Invalid JSON"}, 400)
+
+    allowed = {"pause_enabled", "pause_duration", "voice_output", "voice_input", "voice_name", "alert_delay", "max_retry_time"}
+    updated = {}
+    for key, value in data.items():
+        if key in allowed:
+            runtime_settings[key] = value
+            updated[key] = value
+
+    log(f"⚙️ Settings updated: {updated}")
+    return json_response({"ok": True, "updated": updated, "settings": runtime_settings})
+
+async def api_paused_list(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    paused = []
+    now = time.time()
+    for chat_id, last_seen in list(owner_last_seen.items()):
+        remaining = pause_remaining(chat_id)
+        if remaining > 0:
+            # سعی کن اسم چت رو بگیریم
+            name = None
+            try:
+                entity = await client.get_entity(chat_id)
+                name = getattr(entity, "first_name", None) or getattr(entity, "title", None)
+            except:
+                pass
+            paused.append({
+                "chat_id": chat_id,
+                "name": name,
+                "remaining_seconds": remaining,
+            })
+    paused.sort(key=lambda x: x["remaining_seconds"])
+    return json_response({"paused": paused})
+
+async def api_pause(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    try:
+        data = await request.json()
+        chat_id = int(data.get("chat_id"))
+    except:
+        return json_response({"error": "chat_id required"}, 400)
+    owner_last_seen[chat_id] = time.time()
+    log(f"🛑 Paused {chat_id}")
+    return json_response({"ok": True, "chat_id": chat_id, "remaining": runtime_settings["pause_duration"]})
+
+async def api_resume(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    try:
+        data = await request.json()
+        chat_id = int(data.get("chat_id"))
+    except:
+        return json_response({"error": "chat_id required"}, 400)
+    if chat_id in owner_last_seen:
+        del owner_last_seen[chat_id]
+    log(f"▶️ Resumed {chat_id}")
+    return json_response({"ok": True})
+
+async def api_resume_all(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    count = len(owner_last_seen)
+    owner_last_seen.clear()
+    log(f"▶️ Resumed all ({count} chats)")
+    return json_response({"ok": True, "cleared": count})
+
+async def api_logs(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    return json_response({"logs": list(recent_logs)})
+
+async def api_facts(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    return json_response({
+        "facts": memory.get("learned_facts", {}),
+        "notes": memory.get("owner_notes", []),
+    })
+
+async def api_fact_add(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    try:
+        data = await request.json()
+        key = data.get("key", "").strip()
+        value = data.get("value", "").strip()
+        if not key or not value:
+            return json_response({"error": "key and value required"}, 400)
+        memory.setdefault("learned_facts", {})[key] = value
+        save_memory_async()
+        log(f"📚 Fact added: {key}")
+        return json_response({"ok": True})
+    except Exception as e:
+        return json_response({"error": str(e)}, 500)
+
+async def api_fact_delete(request):
+    if not api_auth(request):
+        return json_response({"error": "Unauthorized"}, 401)
+    try:
+        data = await request.json()
+        key = data.get("key", "").strip()
+        if key in memory.get("learned_facts", {}):
+            del memory["learned_facts"][key]
+            save_memory_async()
+            log(f"🗑️ Fact deleted: {key}")
+            return json_response({"ok": True})
+        return json_response({"error": "not found"}, 404)
+    except Exception as e:
+        return json_response({"error": str(e)}, 500)
+
+async def api_ping(request):
+    return json_response({"pong": True, "time": time.time()})
+
+def create_app():
+    app = web.Application()
+    app.router.add_route("OPTIONS", "/{tail:.*}", handle_options)
+    app.router.add_get("/api/ping", api_ping)
+    app.router.add_get("/api/status", api_status)
+    app.router.add_get("/api/settings", api_get_settings)
+    app.router.add_post("/api/settings", api_update_settings)
+    app.router.add_get("/api/paused", api_paused_list)
+    app.router.add_post("/api/pause", api_pause)
+    app.router.add_post("/api/resume", api_resume)
+    app.router.add_post("/api/resume_all", api_resume_all)
+    app.router.add_get("/api/logs", api_logs)
+    app.router.add_get("/api/facts", api_facts)
+    app.router.add_post("/api/facts/add", api_fact_add)
+    app.router.add_post("/api/facts/delete", api_fact_delete)
+    return app
+
+
 # ============ ردیاب فعالیت تو در DM ها ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_activity(event):
     if not event.is_private:
         return
-
     try:
         me = await client.get_me()
-    except Exception as e:
+    except:
         return
-
     if event.chat_id == me.id:
         return
-
     mark_owner_active(event.chat_id)
     remaining = pause_remaining(event.chat_id)
-    print(f"🛑 Paused chat {event.chat_id} for {remaining//60} min")
+    log(f"🛑 Paused chat {event.chat_id} for {remaining//60}m")
 
 
 # ============ هندلر ادمین ============
@@ -525,7 +727,7 @@ async def on_owner_message(event):
     try:
         me = await client.get_me()
     except Exception as e:
-        print(f"⚠️ Owner check error: {e}")
+        log(f"⚠️ Owner check error: {e}")
         return
 
     if event.chat_id != me.id:
@@ -536,6 +738,9 @@ async def on_owner_message(event):
     text = event.message.text or ""
 
     if not text.strip() and event.message.voice:
+        if not runtime_settings.get("voice_input", True):
+            await event.reply("🚫 خوندن ویس غیرفعاله")
+            return
         text = await handle_voice_input(event) or ""
         if not text:
             await event.reply("متأسفم، نتونستم ویست رو بفهمم 😅")
@@ -545,7 +750,7 @@ async def on_owner_message(event):
     if not text.strip():
         return
 
-    print(f"🔍 Owner: {text[:50]!r}")
+    log(f"🔍 Owner: {text[:50]!r}")
 
     prompt = build_prompt("owner", text, is_owner=True)
     raw, last_error = await ask_gemini(prompt, chat_id=event.chat_id)
@@ -566,7 +771,7 @@ async def on_owner_message(event):
                 await event.reply(f"✅ گرفتم! یادم می‌مونه: {key.strip()} → {value.strip()}")
                 return
         except Exception as e:
-            print(f"LEARN parse error: {e}")
+            log(f"LEARN parse error: {e}")
 
     if "[LEARN_RAW:" in raw:
         try:
@@ -577,7 +782,7 @@ async def on_owner_message(event):
             await event.reply(f"✅ گرفتم! یادم می‌مونه: {inner}")
             return
         except Exception as e:
-            print(f"LEARN_RAW parse error: {e}")
+            log(f"LEARN_RAW parse error: {e}")
 
     if "[FORGET:" in raw:
         try:
@@ -591,7 +796,7 @@ async def on_owner_message(event):
                 await event.reply(f"❓ همچین چیزی توی حافظه‌ام نبود: {key}")
             return
         except Exception as e:
-            print(f"FORGET parse error: {e}")
+            log(f"FORGET parse error: {e}")
 
     if "[SHOW_MEMORY]" in raw:
         facts = memory.get("learned_facts", {})
@@ -643,12 +848,14 @@ async def on_dm(event):
 
     if is_owner_paused(event.chat_id):
         remaining = pause_remaining(event.chat_id)
-        print(f"🛑 Chat {event.chat_id} paused — {remaining//60}m {remaining%60}s remaining. Skipping.")
+        log(f"🛑 Chat {event.chat_id} paused — {remaining//60}m {remaining%60}s left")
         return
 
     text = event.message.text or ""
 
     if not text.strip() and event.message.voice:
+        if not runtime_settings.get("voice_input", True):
+            return
         text = await handle_voice_input(event) or ""
         if not text:
             await event.reply("متأسفم، نتونستم ویست رو بفهمم 😅 می‌تونی متنی بنویسی؟")
@@ -658,13 +865,13 @@ async def on_dm(event):
         return
 
     user_key = str(sender.id)
-    print(f"🔍 User {user_key}: {text[:50]!r}")
+    log(f"🔍 User {user_key}: {text[:50]!r}")
 
     prompt = build_prompt(sender.id, text, is_owner=False)
     raw, last_error = await ask_gemini(prompt, chat_id=event.chat_id)
     if raw is None:
-        print("All models failed")
-        return  # هیچ پیامی نمی‌فرستیم
+        log("All models failed")
+        return
 
     important = "[IMPORTANT]" in raw
     enable_voice = "[ENABLE_VOICE]" in raw
@@ -704,25 +911,35 @@ async def on_dm(event):
             f"🤖 جواب دستیار:\n{reply}"
         )
         await client.send_message("me", alert, silent=True)
-        print(f"📩 Silent alert. Wait {ALERT_DELAY}s...")
-        await asyncio.sleep(ALERT_DELAY)
+        log(f"📩 Silent alert. Wait {runtime_settings['alert_delay']}s...")
+        await asyncio.sleep(runtime_settings["alert_delay"])
         await send_alert(alert)
+
+
+async def start_api_server():
+    app = create_app()
+    runner = web.AppRunner(app)
+    await runner.setup()
+    site = web.TCPSite(runner, "0.0.0.0", PORT)
+    await site.start()
+    log(f"🚀 API server started on port {PORT}")
 
 
 async def main():
     await client.start()
     me = await client.get_me()
-    print(f"✅ Logged in as {me.first_name} (id={me.id})")
-    print("🚀 Userbot is running...")
-    print(f"📚 {len(memory.get('learned_facts', {}))} facts | 📝 {len(memory.get('owner_notes', []))} notes")
-    print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
-    print(f"🔊 Voice output: {VOICE_NAME}")
-    print(f"🎙️ Voice input: enabled (Gemini STT)")
-    print(f"🛡️ Owner handler: Saved Messages only")
-    print(f"⏸️ Human takeover: {PAUSE_DURATION//60} min pause after your DM")
-    print(f"♾️ Retry until success: max {MAX_RETRY_TIME}s")
-    if NTFY_TOPIC:
-        print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
+    log(f"✅ Logged in as {me.first_name} (id={me.id})")
+
+    await start_api_server()
+
+    log("🚀 Userbot is running...")
+    log(f"📚 {len(memory.get('learned_facts', {}))} facts | 📝 {len(memory.get('owner_notes', []))} notes")
+    log(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
+    log(f"🎙️ Voice input: {'enabled' if runtime_settings['voice_input'] else 'disabled'}")
+    log(f"🔊 Voice output: {'enabled' if runtime_settings['voice_output'] else 'disabled'}")
+    log(f"⏸️ Pause: {'enabled' if runtime_settings['pause_enabled'] else 'disabled'} ({runtime_settings['pause_duration']//60} min)")
+    log(f"🔐 API Key: {'set' if API_KEY != 'changeme' else 'NOT SET (danger!)'}")
+
     await client.run_until_disconnected()
 
 
