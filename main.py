@@ -43,20 +43,20 @@ runtime_settings = {
     "voice_input": True,
     "voice_name": VOICE_NAME,
     "alert_delay": ALERT_DELAY,
+    "max_retry_time": 300,
 }
 
-# ============ لاگ زنده (آخرین ۱۰۰ رویداد) ============
+# ============ لاگ زنده ============
 recent_logs = deque(maxlen=100)
 started_at = time.time()
 
 def log(message):
-    """لاگ هم توی کنسول هم توی حافظه"""
     ts = time.strftime("%H:%M:%S")
     entry = {"time": ts, "text": message}
     recent_logs.append(entry)
     print(f"{ts} {message}")
 
-# ============ Gemini Models ============
+# ============ Gemini ============
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
 MODELS = [
@@ -98,7 +98,7 @@ Notes:
   - If someone's reaching out about a project or tech-related, that's usually important.
 """
 
-# ============ کش pause ============
+# ============ Pause cache ============
 owner_last_seen = {}
 
 def mark_owner_active(chat_id):
@@ -521,24 +521,24 @@ client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 #                       REST API
 # ============================================================
 
+CORS_HEADERS = {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers": "X-API-Key, Content-Type",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+}
+
 def api_auth(request):
-    """چک API key"""
     key = request.headers.get("X-API-Key") or request.query.get("api_key")
     return key == API_KEY
 
 def json_response(data, status=200):
-    return web.json_response(data, status=status, headers={
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "X-API-Key, Content-Type",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    })
+    return web.json_response(data, status=status, headers=CORS_HEADERS)
 
 async def handle_options(request):
-    return web.Response(headers={
-        "Access-Control-Allow-Origin": "*",
-        "Access-Control-Allow-Headers": "X-API-Key, Content-Type",
-        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-    })
+    return web.Response(headers=CORS_HEADERS)
+
+async def api_ping(request):
+    return json_response({"pong": True, "time": time.time()})
 
 async def api_status(request):
     if not api_auth(request):
@@ -588,11 +588,9 @@ async def api_paused_list(request):
     if not api_auth(request):
         return json_response({"error": "Unauthorized"}, 401)
     paused = []
-    now = time.time()
-    for chat_id, last_seen in list(owner_last_seen.items()):
+    for chat_id in list(owner_last_seen.keys()):
         remaining = pause_remaining(chat_id)
         if remaining > 0:
-            # سعی کن اسم چت رو بگیریم
             name = None
             try:
                 entity = await client.get_entity(chat_id)
@@ -683,9 +681,6 @@ async def api_fact_delete(request):
         return json_response({"error": "not found"}, 404)
     except Exception as e:
         return json_response({"error": str(e)}, 500)
-
-async def api_ping(request):
-    return json_response({"pong": True, "time": time.time()})
 
 def create_app():
     app = web.Application()
