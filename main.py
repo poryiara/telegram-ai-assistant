@@ -66,7 +66,7 @@ def github_headers():
     }
 
 def fetch_memory():
-    empty = {"conversations": {}, "learned_facts": {}, "owner_notes": [], "voice_preferences": {}}
+    empty = {"learned_facts": {}, "owner_notes": [], "voice_preferences": {}}
     if not GITHUB_TOKEN:
         print("⚠️ No GITHUB_TOKEN — using empty memory")
         return empty, None
@@ -78,9 +78,10 @@ def fetch_memory():
             content = base64.b64decode(data["content"]).decode("utf-8")
             mem = json.loads(content)
             mem.setdefault("voice_preferences", {})
-            mem.setdefault("conversations", {})
             mem.setdefault("learned_facts", {})
             mem.setdefault("owner_notes", [])
+            # حذف conversations قدیمی اگه بود
+            mem.pop("conversations", None)
             return mem, data["sha"]
         elif r.status_code == 404:
             print("ℹ️ memory.json not found — starting fresh")
@@ -92,11 +93,18 @@ def fetch_memory():
     return empty, None
 
 def push_memory(mem):
+    """فقط وقتی صدا زده می‌شه که چیز جدیدی یاد گرفته باشیم"""
     if not GITHUB_TOKEN:
         return
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     _, sha = fetch_memory()
-    content = base64.b64encode(json.dumps(mem, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
+    # فقط این سه تا کلید رو ذخیره کن
+    to_save = {
+        "learned_facts": mem.get("learned_facts", {}),
+        "owner_notes": mem.get("owner_notes", []),
+        "voice_preferences": mem.get("voice_preferences", {}),
+    }
+    content = base64.b64encode(json.dumps(to_save, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
     payload = {"message": "Update AI memory", "content": content, "branch": GITHUB_BRANCH}
     if sha:
         payload["sha"] = sha
@@ -110,11 +118,12 @@ def push_memory(mem):
         print(f"⚠️ GitHub push exception: {e}")
 
 def save_memory_async():
+    """فقط وقتی صدا زده می‌شه که واقعاً چیزی برای ذخیره داریم"""
     loop = asyncio.get_event_loop()
     loop.run_in_executor(None, push_memory, memory)
 
 memory, _sha = fetch_memory()
-histories = memory.get("conversations", {})
+histories = {}  # تاریخچه فقط توی RAM، ذخیره نمی‌شه
 MAX_HISTORY = 12
 
 def get_voice_pref(key):
@@ -213,7 +222,7 @@ DO save if the owner says:
 - "چی یادت هست؟" / "چی از من میدونی؟" (for SHOW_MEMORY)
 
 DO NOT save in these cases: normal conversation, questions, jokes, small talk.
-
+NEVER save just because the owner asked a question or shared info casually.
 When in doubt, DO NOT save.
 
 === WEB TOOLS ===
@@ -731,8 +740,6 @@ async def on_owner_message(event):
         return
 
     histories.setdefault("owner", []).append(f"You: {reply}")
-    memory["conversations"] = histories
-    save_memory_async()
 
     await event.reply(reply)
 
@@ -795,8 +802,6 @@ async def on_dm(event):
         return
 
     histories.setdefault(user_key, []).append(f"You: {reply}")
-    memory["conversations"] = histories
-    save_memory_async()
 
     await event.reply(reply)
 
@@ -825,7 +830,7 @@ async def main():
     me = await client.get_me()
     print(f"✅ Logged in as {me.first_name} (id={me.id})")
     print("🚀 Userbot is running...")
-    print(f"📚 {len(memory.get('learned_facts', {}))} facts | 💬 {len(memory.get('conversations', {}))} convos")
+    print(f"📚 {len(memory.get('learned_facts', {}))} facts | 📝 {len(memory.get('owner_notes', []))} notes")
     print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
     print(f"🔊 Voice: {VOICE_NAME}")
     print(f"🔍 Web Search: enabled (DuckDuckGo)")
