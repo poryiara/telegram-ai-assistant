@@ -3,9 +3,13 @@ import json
 import base64
 import asyncio
 import requests
+import subprocess
+import tempfile
+import re
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
 from google import genai
+import edge_tts
 
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
@@ -15,14 +19,13 @@ OWNER_ID = int(os.environ["OWNER_ID"])
 OWNER_NAME = os.environ.get("OWNER_NAME", "Poryia")
 NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 
-# GitHub memory
+VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
+ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
+
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
 GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
-
-# تاخیر (ثانیه) بین ارسال پیام به Saved Messages و آلارم گوشی
-ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "5"))
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -61,24 +64,30 @@ def github_headers():
     }
 
 def fetch_memory():
+    empty = {"conversations": {}, "learned_facts": {}, "owner_notes": [], "voice_preferences": {}}
     if not GITHUB_TOKEN:
         print("⚠️ No GITHUB_TOKEN — using empty memory")
-        return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
+        return empty, None
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     try:
         r = requests.get(url, headers=github_headers(), params={"ref": GITHUB_BRANCH}, timeout=10)
         if r.status_code == 200:
             data = r.json()
             content = base64.b64decode(data["content"]).decode("utf-8")
-            return json.loads(content), data["sha"]
+            mem = json.loads(content)
+            mem.setdefault("voice_preferences", {})
+            mem.setdefault("conversations", {})
+            mem.setdefault("learned_facts", {})
+            mem.setdefault("owner_notes", [])
+            return mem, data["sha"]
         elif r.status_code == 404:
-            print("ℹ️ memory.json not found on GitHub — starting fresh")
-            return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
+            print("ℹ️ memory.json not found — starting fresh")
+            return empty, None
         else:
             print(f"⚠️ GitHub fetch error: {r.status_code} {r.text[:200]}")
     except Exception as e:
         print(f"⚠️ GitHub fetch exception: {e}")
-    return {"conversations": {}, "learned_facts": {}, "owner_notes": []}, None
+    return empty, None
 
 def push_memory(mem):
     if not GITHUB_TOKEN:
@@ -106,6 +115,14 @@ memory, _sha = fetch_memory()
 histories = memory.get("conversations", {})
 MAX_HISTORY = 12
 
+def get_voice_pref(key):
+    """None = نپرسیده، True = فعال، False = غیرفعال"""
+    return memory.get("voice_preferences", {}).get(str(key))
+
+def set_voice_pref(key, value):
+    memory.setdefault("voice_preferences", {})[str(key)] = value
+    save_memory_async()
+
 def build_owner_info():
     info = OWNER_INFO_BASE
     facts = memory.get("learned_facts", {})
@@ -120,11 +137,41 @@ def build_owner_info():
             info += f"- {note}\n"
     return info
 
+def voice_status_block(pref, is_owner=False):
+    """بلوک دستورالعمل ویس برای AI"""
+    if pref is None:
+        return """=== VOICE MESSAGES ===
+This user hasn't chosen yet about voice messages.
+→ At the END of your reply, gently offer voice ONCE in a friendly way.
+  Persian example: "راستی اگه راحت‌تری می‌تونم برات ویس هم بفرستم، فقط بگو 😊"
+→ Don't be pushy. Only offer once.
+→ CRITICAL: If THIS message is a response to a previous voice offer:
+   - If they AGREE ("آره", "باشه", "اوکی", "بفرست", "yes", "ok"): output [ENABLE_VOICE] on its own line at the end.
+   - If they DECLINE ("نه", "نمیخوام", "no", "لازم نیست"): output [DISABLE_VOICE] on its own line at the end.
+→ Otherwise (no clear answer yet), output NEITHER voice tag."""
+
+    if pref is True:
+        return """=== VOICE MESSAGES ===
+Voice is ON for this user. They agreed to receive voice messages.
+→ Reply normally. A voice version of your reply will be sent automatically.
+→ Do NOT mention voice or offer it again.
+→ EXCEPTION: If the user clearly says they don't want voice anymore
+   ("دیگه ویس نمیخوام", "stop voice", "متن بفرست", "text only"), output [DISABLE_VOICE] on its own line at the end."""
+
+    # pref is False
+    return """=== VOICE MESSAGES ===
+Voice is OFF for this user. They declined previously.
+→ Text only. Do NOT offer voice again.
+→ EXCEPTION: If the user asks for voice ("برام ویس بفرست", "send voice", "ویس بفرست"), output [ENABLE_VOICE] on its own line at the end."""
+
 def build_prompt(user_id, new_message, is_owner=False):
     hist = histories.setdefault(str(user_id), [])
     hist.append(f"User: {new_message}")
     del hist[:-MAX_HISTORY]
+
     if is_owner:
+        vpref = get_voice_pref("owner")
+        vblock = voice_status_block(vpref, is_owner=True)
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You are talking to {OWNER_NAME} THEMSELVES in their Saved Messages.
 This is your boss. Be warm, friendly, casual — like a close friend.
@@ -145,7 +192,7 @@ Tags you can use:
 ⚠️ CRITICAL: Be VERY conservative about saving. Only save when the owner
 EXPLICITLY and CLEARLY asks you to remember something.
 
-DO save if the owner says things like:
+DO save if the owner says:
 - "یادت باشه..." / "به خاطر بسپار..." / "اینو یادت بمونه..."
 - "remember that..." / "keep in mind..."
 - "فراموش کن..." / "پاکش کن..." (for FORGET)
@@ -153,43 +200,36 @@ DO save if the owner says things like:
 
 DO NOT save in these cases (just chat normally):
 - Normal conversation, greetings, questions, jokes
-- The owner asking YOU questions (don't save their questions as facts)
-- The owner telling you about their day in passing
+- The owner asking YOU questions
+- The owner telling you about their day
 - The owner asking for advice or opinions
-- Small talk, casual chat, or emotional conversations
-- Anything that isn't explicitly a "remember this" request
+- Small talk, casual chat, emotional conversations
+- Anything not explicitly a "remember this" request
 
-When in doubt, DO NOT save. Just reply as a friend.
+When in doubt, DO NOT save.
 
 Examples:
 Owner: سلام، خوبی؟
-You: سلام خودم! 😄 خوبم، تو چطوری؟ چه خبر از باشگاه؟
+You: سلام خودم! 😄 خوبم، تو چطوری؟
 (NO tags — just chat)
-
-Owner: امروز رفتم باشگاه، خیلی خسته‌ام
-You: آفرین 💪 خستگی بعد از تمرین بهترین حس دنیاست. استراحت کن.
-(NO tags — just chat)
-
-Owner: چه چیزایی میخوای درباره من بدونی؟
-You: هر چی دوست داری بهم بگی 😊 مثلاً علاقه‌مندی‌هات، دوستات، یا هر چیز دیگه‌ای که فکر می‌کنی به بهتر جواب دادن کمک می‌کنه.
-(NO tags — this is a question, not a save request)
 
 Owner: یادت باشه اسم بهترین دوستم علیه
 You: [LEARN: best_friend | Ali]
 
-Owner: راستی یادت باشه من یه پروژه VPN دارم
-You: [LEARN_RAW: Poryia has a personal VPN project]
-
-Owner: اون چیز درباره بهترین دوستمو فراموش کن
-You: [FORGET: best_friend]
-
 Owner: چی یادت هست درباره من؟
 You: [SHOW_MEMORY]
+
+{vblock}
+
+CRITICAL: Voice tags ([ENABLE_VOICE]/[DISABLE_VOICE]) go AFTER the [IMPORTANT]/[NORMAL] tag,
+each on its own line. Never mix them with memory tags.
 
 === Current conversation ===
 {chr(10).join(hist)}
 You:"""
     else:
+        vpref = get_voice_pref(user_id)
+        vblock = voice_status_block(vpref, is_owner=False)
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You answer Telegram messages on their behalf while they are away.
 You're warm, funny, and real — like a close friend. Use emojis naturally.
@@ -206,6 +246,14 @@ Sound native in Persian — casual, not bookish.
 - If important, tell the user you'll notify {OWNER_NAME}.
 - Keep replies short (1-3 sentences).
 - At the very end, on a new line, add exactly one tag: [IMPORTANT] or [NORMAL]
+
+{vblock}
+
+CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
+Example output when user agrees to voice:
+حله! از این به بعد برات ویس هم می‌فرستم 🎤
+[NORMAL]
+[ENABLE_VOICE]
 
 === Current conversation ===
 {chr(10).join(hist)}
@@ -236,9 +284,8 @@ async def ask_gemini(prompt):
     return None, last_error
 
 async def send_alert(alert_text):
-    """ارسال آلارم فوری از طریق ntfy.sh"""
     if not NTFY_TOPIC:
-        print("⚠️ NTFY_TOPIC تنظیم نشده — آلارم فرستاده نشد")
+        print("⚠️ NTFY_TOPIC not set — skipping alert")
         return
     url = f"https://ntfy.sh/{NTFY_TOPIC}"
     headers = {
@@ -252,12 +299,100 @@ async def send_alert(alert_text):
             None,
             lambda: requests.post(url, data=alert_text.encode('utf-8'), headers=headers, timeout=10)
         )
-        print("🔔 آلارم از طریق ntfy.sh فرستاده شد")
+        print("🔔 Alert sent via ntfy")
     except Exception as e:
-        print(f"⚠️ خطای ntfy: {e}")
+        print(f"⚠️ ntfy error: {e}")
+
+def clean_text_for_voice(text):
+    emoji_pattern = re.compile(
+        "["
+        "\U0001F600-\U0001F64F"
+        "\U0001F300-\U0001F5FF"
+        "\U0001F680-\U0001F6FF"
+        "\U0001F1E0-\U0001F1FF"
+        "\U00002702-\U000027B0"
+        "\U000024C2-\U0001F251"
+        "\U0001f926-\U0001f937"
+        "\U00010000-\U0010ffff"
+        "\u2640-\u2642"
+        "\u2600-\u2B55"
+        "\u200d"
+        "\u23cf"
+        "\u23e9"
+        "\u231a"
+        "\ufe0f"
+        "\u3030"
+        "]+",
+        flags=re.UNICODE
+    )
+    text = emoji_pattern.sub("", text)
+    text = text.replace("*", "").replace("_", "").replace("`", "")
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+async def text_to_voice(text, voice=VOICE_NAME):
+    try:
+        clean = clean_text_for_voice(text)
+        if not clean or len(clean) < 2:
+            print("⚠️ Text too short for voice")
+            return None
+        with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as tmp_mp3:
+            mp3_path = tmp_mp3.name
+        communicate = edge_tts.Communicate(clean, voice)
+        await communicate.save(mp3_path)
+        ogg_path = mp3_path.replace(".mp3", ".ogg")
+        result = subprocess.run(
+            [
+                "ffmpeg", "-y", "-i", mp3_path,
+                "-c:a", "libopus",
+                "-b:a", "48k",
+                "-vbr", "on",
+                "-compression_level", "10",
+                "-frame_duration", "60",
+                "-application", "voip",
+                ogg_path
+            ],
+            capture_output=True,
+            timeout=30
+        )
+        try:
+            os.unlink(mp3_path)
+        except:
+            pass
+        if result.returncode != 0:
+            print(f"⚠️ ffmpeg error: {result.stderr.decode()[:200]}")
+            return None
+        print(f"🔊 Voice generated")
+        return ogg_path
+    except Exception as e:
+        print(f"⚠️ Voice gen error: {e}")
+        return None
+
+async def send_voice_reply(chat_id, reply_to_id, text):
+    """تولید و ارسال ویس"""
+    voice_path = await text_to_voice(text)
+    if not voice_path:
+        return
+    try:
+        await client.send_file(
+            chat_id,
+            voice_path,
+            voice_note=True,
+            reply_to=reply_to_id
+        )
+        print("🎤 Voice sent")
+    except Exception as e:
+        print(f"⚠️ Voice send error: {e}")
+    finally:
+        try:
+            os.unlink(voice_path)
+        except:
+            pass
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
+
+# ============ هندلر ادمین (Saved Messages) ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_message(event):
     if not event.is_private:
@@ -269,16 +404,24 @@ async def on_owner_message(event):
     except Exception as e:
         print(f"⚠️ Owner check error: {e}")
         return
+
     text = event.message.text or ""
-    print(f"🔍 Owner message: {text[:50]!r}")
     if not text.strip():
         return
+
+    print(f"🔍 Owner: {text[:50]!r}")
+
     prompt = build_prompt("owner", text, is_owner=True)
     raw, last_error = await ask_gemini(prompt)
     if raw is None:
         await event.reply("اوه، الان سرورای گوگل شلوغن 😅 یه دقیقه دیگه دوباره بفرست.")
         return
 
+    # ==== تشخیص تگ‌های ویس ====
+    enable_voice = "[ENABLE_VOICE]" in raw
+    disable_voice = "[DISABLE_VOICE]" in raw
+
+    # ==== پردازش تگ‌های حافظه ====
     if "[LEARN:" in raw:
         try:
             inner = raw.split("[LEARN:", 1)[1].split("]", 1)[0].strip()
@@ -333,22 +476,50 @@ async def on_owner_message(event):
         await event.reply(reply)
         return
 
-    reply = raw.replace("[IMPORTANT]", "").replace("[NORMAL]", "").strip()
+    # ==== آپدیت تنظیمات ویس ====
+    if enable_voice:
+        set_voice_pref("owner", True)
+        print("🎤 Voice ENABLED for owner")
+    elif disable_voice:
+        set_voice_pref("owner", False)
+        print("🔇 Voice DISABLED for owner")
+
+    # ==== پاک‌سازی reply ====
+    reply = (
+        raw.replace("[IMPORTANT]", "")
+        .replace("[NORMAL]", "")
+        .replace("[ENABLE_VOICE]", "")
+        .replace("[DISABLE_VOICE]", "")
+        .strip()
+    )
     if not reply:
         return
+
     histories.setdefault("owner", []).append(f"You: {reply}")
     memory["conversations"] = histories
     save_memory_async()
+
+    # ==== ارسال متن ====
     await event.reply(reply)
 
+    # ==== ارسال ویس (اگه فعال) ====
+    should_voice = get_voice_pref("owner") is True
+    if should_voice and not disable_voice:
+        await send_voice_reply(event.chat_id, event.message.id, reply)
+
+
+# ============ هندلر کاربران عادی ============
 @client.on(events.NewMessage(incoming=True, func=lambda e: e.is_private))
 async def on_dm(event):
     sender = await event.get_sender()
     if sender.bot or sender.id == OWNER_ID:
         return
+
     text = event.message.text or ""
     if not text.strip():
         return
+
+    user_key = str(sender.id)
     prompt = build_prompt(sender.id, text, is_owner=False)
     raw, last_error = await ask_gemini(prompt)
     if raw is None:
@@ -356,15 +527,43 @@ async def on_dm(event):
         await event.reply("الان یه کم شلوغم، چند لحظه دیگه دوباره پیام بده 🙏")
         return
 
+    # ==== تشخیص تگ‌ها ====
     important = "[IMPORTANT]" in raw
-    reply = raw.replace("[IMPORTANT]", "").replace("[NORMAL]", "").strip()
+    enable_voice = "[ENABLE_VOICE]" in raw
+    disable_voice = "[DISABLE_VOICE]" in raw
+
+    # ==== آپدیت تنظیمات ویس ====
+    if enable_voice:
+        set_voice_pref(user_key, True)
+        print(f"🎤 Voice ENABLED for {user_key}")
+    elif disable_voice:
+        set_voice_pref(user_key, False)
+        print(f"🔇 Voice DISABLED for {user_key}")
+
+    # ==== پاک‌سازی reply ====
+    reply = (
+        raw.replace("[IMPORTANT]", "")
+        .replace("[NORMAL]", "")
+        .replace("[ENABLE_VOICE]", "")
+        .replace("[DISABLE_VOICE]", "")
+        .strip()
+    )
     if not reply:
         return
-    histories.setdefault(str(sender.id), []).append(f"You: {reply}")
+
+    histories.setdefault(user_key, []).append(f"You: {reply}")
     memory["conversations"] = histories
     save_memory_async()
+
+    # ==== ارسال متن ====
     await event.reply(reply)
 
+    # ==== ارسال ویس (اگه فعال) ====
+    should_voice = get_voice_pref(user_key) is True
+    if should_voice and not disable_voice:
+        await send_voice_reply(event.chat_id, event.message.id, reply)
+
+    # ==== هشدار پیام مهم ====
     if important:
         sender_name = sender.first_name or "Unknown"
         username = f"@{sender.username}" if sender.username else "—"
@@ -375,25 +574,24 @@ async def on_dm(event):
             f"📩 پیام کاربر:\n{text}\n\n"
             f"🤖 جواب دستیار:\n{reply}"
         )
-        # ۱. اول پیام بی‌صدا به Saved Messages
         await client.send_message("me", alert, silent=True)
-        print(f"📩 Silent alert sent to Saved Messages. Waiting {ALERT_DELAY}s...")
-        # ۲. صبر کن تا صدای تلگرام تموم بشه
+        print(f"📩 Silent alert sent. Waiting {ALERT_DELAY}s...")
         await asyncio.sleep(ALERT_DELAY)
-        # ۳. بعد آلارم ntfy
         await send_alert(alert)
+
 
 async def main():
     await client.start()
     me = await client.get_me()
     print(f"✅ Logged in as {me.first_name} (id={me.id})")
     print("🚀 Userbot is running...")
-    print(f"📚 Loaded {len(memory.get('learned_facts', {}))} facts from GitHub")
-    print(f"💬 Loaded {len(memory.get('conversations', {}))} conversations")
+    print(f"📚 {len(memory.get('learned_facts', {}))} facts | 💬 {len(memory.get('conversations', {}))} convos")
+    print(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
+    print(f"🔊 Voice: {VOICE_NAME}")
     if NTFY_TOPIC:
-        print(f"🔔 ntfy alerts enabled for topic: {NTFY_TOPIC}")
-        print(f"⏱️ Alert delay: {ALERT_DELAY} seconds")
+        print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
+
 
 if __name__ == "__main__":
     asyncio.run(main())
