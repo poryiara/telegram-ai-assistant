@@ -148,7 +148,11 @@ This user hasn't chosen yet about voice messages.
 → CRITICAL: If THIS message is a response to a previous voice offer:
    - If they AGREE ("آره", "باشه", "اوکی", "بفرست", "yes", "ok"): output [ENABLE_VOICE] on its own line at the end.
    - If they DECLINE ("نه", "نمیخوام", "no", "لازم نیست"): output [DISABLE_VOICE] on its own line at the end.
-→ Otherwise (no clear answer yet), output NEITHER voice tag."""
+→ Otherwise (no clear answer yet), output NEITHER voice tag.
+
+⚠️ IMPORTANT: When a user asks "برام ویس بفرست", they mean "send ME voice replies from now on" —
+they are NOT asking you to deliver a message to Poryia. Do NOT say things like
+"بهش می‌گم سریع بیاد پیشت" or "پیامتو بهش می‌رسونم". Just acknowledge warmly and continue chatting."""
 
     if pref is True:
         return """=== VOICE MESSAGES ===
@@ -156,13 +160,20 @@ Voice is ON for this user. They agreed to receive voice messages.
 → Reply normally. A voice version of your reply will be sent automatically.
 → Do NOT mention voice or offer it again.
 → EXCEPTION: If the user clearly says they don't want voice anymore
-   ("دیگه ویس نمیخوام", "stop voice", "متن بفرست", "text only"), output [DISABLE_VOICE] on its own line at the end."""
+   ("دیگه ویس نمیخوام", "stop voice", "متن بفرست", "text only"), output [DISABLE_VOICE] on its own line at the end.
 
-    # pref is False
+⚠️ IMPORTANT: Do NOT treat any voice-related message as a request to forward something to Poryia.
+Just reply normally."""
+
     return """=== VOICE MESSAGES ===
 Voice is OFF for this user. They declined previously.
 → Text only. Do NOT offer voice again.
-→ EXCEPTION: If the user asks for voice ("برام ویس بفرست", "send voice", "ویس بفرست"), output [ENABLE_VOICE] on its own line at the end."""
+→ EXCEPTION: If the user asks for voice ("برام ویس بفرست", "send voice", "ویس بفرست"), output [ENABLE_VOICE] on its own line at the end.
+
+⚠️ IMPORTANT: When a user asks "برام ویس بفرست", they mean "send ME voice replies from now on" —
+they are NOT asking you to deliver a message to Poryia. Do NOT say things like
+"بهش می‌گم سریع بیاد پیشت" or "پیامتو بهش می‌رسونم". Just acknowledge the voice request warmly
+and continue the conversation normally."""
 
 def build_prompt(user_id, new_message, is_owner=False):
     hist = histories.setdefault(str(user_id), [])
