@@ -24,8 +24,7 @@ NTFY_TOPIC = os.environ.get("NTFY_TOPIC", "")
 VOICE_NAME = os.environ.get("VOICE_NAME", "fa-IR-FaridNeural")
 ALERT_DELAY = int(os.environ.get("ALERT_DELAY", "15"))
 
-# مدت زمان pause بعد از آخرین پیام تو (ثانیه)
-PAUSE_DURATION = int(os.environ.get("PAUSE_DURATION", "1800"))  # 30 دقیقه
+PAUSE_DURATION = int(os.environ.get("PAUSE_DURATION", "1800"))
 
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
@@ -53,32 +52,28 @@ STT_MODELS = [
     "gemini-3.1-flash-lite",
 ]
 
-RETRY_DELAY = 0.5
+# حداکثر زمان تلاش برای جواب دادن (ثانیه)
+MAX_RETRY_TIME = 300  # 5 دقیقه
+# فاصله بین دورها (ثانیه) — هر دور بیشتر می‌شه
+RETRY_DELAYS = [0.5, 1, 2, 3, 5, 8, 13, 20, 30, 30, 30]
 
-# ============ کش pause (فقط توی RAM) ============
-# chat_id → timestamp آخرین پیام تو
+# ============ کش pause ============
 owner_last_seen = {}
 
 def mark_owner_active(chat_id):
-    """وقتی تو توی یه چت پیام می‌دی، تایمر رو ریست کن"""
     owner_last_seen[chat_id] = time.time()
 
 def is_owner_paused(chat_id):
-    """آیا ربات باید توی این چت ساکت بمونه؟"""
     last = owner_last_seen.get(chat_id, 0)
     if last == 0:
         return False
-    elapsed = time.time() - last
-    return elapsed < PAUSE_DURATION
+    return (time.time() - last) < PAUSE_DURATION
 
 def pause_remaining(chat_id):
-    """چند ثانیه دیگه pause تموم می‌شه"""
     last = owner_last_seen.get(chat_id, 0)
     if last == 0:
         return 0
-    elapsed = time.time() - last
-    remaining = PAUSE_DURATION - elapsed
-    return max(0, int(remaining))
+    return max(0, int(PAUSE_DURATION - (time.time() - last)))
 
 OWNER_INFO_BASE = """
 Name: Poryia Rahmani
@@ -278,46 +273,61 @@ CRITICAL: Voice tags go AFTER [IMPORTANT]/[NORMAL] tag, each on its own line.
 You:"""
     return prompt
 
-async def ask_gemini(prompt):
-    raw = None
+
+async def ask_gemini(prompt, chat_id=None):
+    """
+    فراخوانی Gemini با retry بی‌نهایت.
+    تا وقتی یه مدل جواب بده، ادامه می‌ده.
+    حین انتظار، typing نشون می‌ده.
+    """
+    started = time.time()
+    round_num = 0
     last_error = None
-    for model_name in MODELS:
-        try:
-            result = ai.models.generate_content(model=model_name, contents=prompt)
-            raw = (result.text or "").strip()
-            if raw:
-                print(f"✅ {model_name}")
-                return raw, None
-            else:
-                print(f"⚠️ empty from {model_name}")
+
+    while True:
+        round_num += 1
+        # توی هر دور، همه‌ی مدل‌ها رو امتحان کن
+        for model_name in MODELS:
+            try:
+                result = ai.models.generate_content(model=model_name, contents=prompt)
+                raw = (result.text or "").strip()
+                if raw:
+                    elapsed = int(time.time() - started)
+                    print(f"✅ {model_name} (round {round_num}, {elapsed}s)")
+                    return raw, None
+            except Exception as e:
+                last_error = e
+                err_str = str(e)
+                if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+                    print(f"⏸️ {model_name}: quota")
+                elif "503" in err_str or "UNAVAILABLE" in err_str:
+                    print(f"⏳ {model_name}: busy")
+                elif "404" in err_str or "NOT_FOUND" in err_str:
+                    print(f"❌ {model_name}: not found")
+                else:
+                    print(f"❌ {model_name}: {err_str[:80]}")
                 continue
-        except Exception as e:
-            last_error = e
-            err_str = str(e)
-            if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
-                print(f"⏸️ {model_name}: quota")
-            elif "503" in err_str or "UNAVAILABLE" in err_str:
-                print(f"⏳ {model_name}: busy")
-            elif "404" in err_str or "NOT_FOUND" in err_str:
-                print(f"❌ {model_name}: not found")
-            else:
-                print(f"❌ {model_name}: {err_str[:80]}")
-            continue
 
-    print(f"⏸️ retry in {RETRY_DELAY}s...")
-    await asyncio.sleep(RETRY_DELAY)
-    for model_name in MODELS:
-        try:
-            result = ai.models.generate_content(model=model_name, contents=prompt)
-            raw = (result.text or "").strip()
-            if raw:
-                print(f"✅ {model_name} (retry)")
-                return raw, None
-        except Exception as e:
-            last_error = e
-            continue
+        # چک کن از حد مجاز رد نشده باشیم
+        elapsed = time.time() - started
+        if elapsed > MAX_RETRY_TIME:
+            print(f"⛔ Gave up after {int(elapsed)}s")
+            return None, last_error
 
-    return None, last_error
+        # تاخیر قبل از دور بعدی (افزایشی)
+        delay_idx = min(round_num - 1, len(RETRY_DELAYS) - 1)
+        delay = RETRY_DELAYS[delay_idx]
+        print(f"⏸️ Round {round_num} failed — retry in {delay}s...")
+
+        # نشون بده داره تایپ می‌کنه (تا کاربر بفهمه ربات داره کار می‌کنه)
+        if chat_id:
+            try:
+                await client.action(chat_id, "typing")
+            except:
+                pass
+
+        await asyncio.sleep(delay)
+
 
 async def send_alert(alert_text):
     if not NTFY_TOPIC:
@@ -340,11 +350,17 @@ async def send_alert(alert_text):
 
 # ============ Speech-to-Text ============
 async def transcribe_voice(voice_path):
-    try:
-        with open(voice_path, "rb") as f:
-            audio_data = f.read()
-
-        if len(audio_data) < 100:
+    started = time.time()
+    round_num = 0
+    while True:
+        round_num += 1
+        try:
+            with open(voice_path, "rb") as f:
+                audio_data = f.read()
+            if len(audio_data) < 100:
+                return None
+        except Exception as e:
+            print(f"⚠️ File read error: {e}")
             return None
 
         for model_name in STT_MODELS:
@@ -362,7 +378,7 @@ async def transcribe_voice(voice_path):
                 )
                 text = (response.text or "").strip()
                 if text:
-                    print(f"🎤 STT: {model_name}")
+                    print(f"🎤 STT: {model_name} (round {round_num})")
                     return text
             except Exception as e:
                 err_str = str(e)
@@ -373,10 +389,15 @@ async def transcribe_voice(voice_path):
                 else:
                     print(f"❌ STT {model_name}: {err_str[:80]}")
                 continue
-        return None
-    except Exception as e:
-        print(f"⚠️ STT error: {e}")
-        return None
+
+        elapsed = time.time() - started
+        if elapsed > MAX_RETRY_TIME:
+            print(f"⛔ STT gave up after {int(elapsed)}s")
+            return None
+
+        delay = RETRY_DELAYS[min(round_num - 1, len(RETRY_DELAYS) - 1)]
+        print(f"⏸️ STT round {round_num} failed — retry in {delay}s...")
+        await asyncio.sleep(delay)
 
 async def handle_voice_input(event):
     try:
@@ -479,14 +500,9 @@ async def send_voice_reply(chat_id, reply_to_id, text):
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
-# ============ ردیاب فعالیت تو در DM ها (بدون پاسخ) ============
+# ============ ردیاب فعالیت تو در DM ها ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_activity(event):
-    """
-    این هندلر فقط فعالیت تو رو توی DM ها ردیابی می‌کنه.
-    اگه توی Saved Messages باشه، هیچ کاری نمی‌کنه (چون هندلر اصلی جواب می‌ده).
-    اگه توی DM با کسی باشه، اون چت رو pause می‌کنه.
-    """
     if not event.is_private:
         return
 
@@ -495,17 +511,15 @@ async def on_owner_activity(event):
     except Exception as e:
         return
 
-    # اگه Saved Messages بود، این هندلر کاری نکنه
     if event.chat_id == me.id:
         return
 
-    # این یه DM با یه کاربر دیگه‌ست → pause کن
     mark_owner_active(event.chat_id)
     remaining = pause_remaining(event.chat_id)
-    print(f"🛑 Paused chat {event.chat_id} for {remaining//60} min (you sent a message)")
+    print(f"🛑 Paused chat {event.chat_id} for {remaining//60} min")
 
 
-# ============ هندلر ادمین (فقط Saved Messages) ============
+# ============ هندلر ادمین ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_message(event):
     try:
@@ -534,9 +548,9 @@ async def on_owner_message(event):
     print(f"🔍 Owner: {text[:50]!r}")
 
     prompt = build_prompt("owner", text, is_owner=True)
-    raw, last_error = await ask_gemini(prompt)
+    raw, last_error = await ask_gemini(prompt, chat_id=event.chat_id)
     if raw is None:
-        await event.reply("اوه، الان سرورای گوگل شلوغن 😅 یه دقیقه دیگه دوباره بفرست.")
+        await event.reply("متأسفم، الان نتونستم جواب بدم. دوباره امتحان کن 🙏")
         return
 
     enable_voice = "[ENABLE_VOICE]" in raw
@@ -627,7 +641,6 @@ async def on_dm(event):
     if sender.bot or sender.id == OWNER_ID:
         return
 
-    # چک کن آیا این چت pause شده
     if is_owner_paused(event.chat_id):
         remaining = pause_remaining(event.chat_id)
         print(f"🛑 Chat {event.chat_id} paused — {remaining//60}m {remaining%60}s remaining. Skipping.")
@@ -648,11 +661,10 @@ async def on_dm(event):
     print(f"🔍 User {user_key}: {text[:50]!r}")
 
     prompt = build_prompt(sender.id, text, is_owner=False)
-    raw, last_error = await ask_gemini(prompt)
+    raw, last_error = await ask_gemini(prompt, chat_id=event.chat_id)
     if raw is None:
         print("All models failed")
-        await event.reply("الان یه کم شلوغم، چند لحظه دیگه دوباره پیام بده 🙏")
-        return
+        return  # هیچ پیامی نمی‌فرستیم
 
     important = "[IMPORTANT]" in raw
     enable_voice = "[ENABLE_VOICE]" in raw
@@ -708,6 +720,7 @@ async def main():
     print(f"🎙️ Voice input: enabled (Gemini STT)")
     print(f"🛡️ Owner handler: Saved Messages only")
     print(f"⏸️ Human takeover: {PAUSE_DURATION//60} min pause after your DM")
+    print(f"♾️ Retry until success: max {MAX_RETRY_TIME}s")
     if NTFY_TOPIC:
         print(f"🔔 ntfy: {NTFY_TOPIC} | ⏱️ delay: {ALERT_DELAY}s")
     await client.run_until_disconnected()
