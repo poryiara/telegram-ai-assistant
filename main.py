@@ -15,7 +15,7 @@ from google.genai import types
 from aiohttp import web
 import edge_tts
 
-# ============ تنظیمات محیطی ============
+# ============ Config ============
 API_ID = int(os.environ["API_ID"])
 API_HASH = os.environ["API_HASH"]
 SESSION_STRING = os.environ["SESSION_STRING"]
@@ -48,9 +48,9 @@ chat_names_cache = {}
 custom_pause_durations = {}
 global_mute_until = 0
 last_bot_send_time = 0
-dm_senders = []          # فقط DM بدون bot
-all_senders = []         # همه چت‌ها (گروه، کانال، bot)
-bot_last_replies = {}    # {chat_id: {"text": ..., "ts": ...}} - پاسخ‌های ربات
+dm_senders = []
+all_senders = []
+bot_last_replies = {}
 recent_actions = deque(maxlen=15)
 recent_logs = deque(maxlen=100)
 started_at = time.time()
@@ -73,26 +73,74 @@ STT_MODELS = ["gemini-3.8-flash", "gemini-3.7-flash", "gemini-3.6-flash",
               "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.1-flash-lite"]
 RETRY_DELAYS = [0.5, 1, 2, 3, 5, 8, 13, 20, 30, 30, 30]
 
-OWNER_INFO_BASE = """
-Name: Poryia Rahmani
-Nickname: Poryia
-Age group: Teenager / student
-Location: Iran
-Status: Student
-Interests: Bodybuilding, computers, AI, coding
-Current projects: AI assistant, VPN app
-Personality: Young, ambitious, hardworking
-Notes: Student, busy during day
-"""
+# ============ ProgressReporter ============
+class ProgressReporter:
+    MESSAGES = [
+        "⌛ یه کم طولانی شد، هنوز دارم روش کار می‌کنم...",
+        "💪 دارم تلاش می‌کنم، یه لحظه صبر...",
+        "🙏 عذر می‌خوام طول کشید، هنوز مشغولم...",
+        "😅 خیلی طول کشید ولی دارم ادامه می‌دم...",
+        "⏳ هنوز در حال پردازش...",
+        "🔍 دارم دنبال جواب می‌گردم...",
+        "⚙️ پردازش در جریانه، صبر کن...",
+        "🔄 دارم دوباره تلاش می‌کنم...",
+        "💭 تقریباً تمومه، فقط چند لحظه...",
+        "🎯 دارم نتیجه رو آماده می‌کنم...",
+        "📝 دارم جواب رو می‌نویسم...",
+        "✨ آخرین تلاش...",
+    ]
+    
+    def __init__(self, chat_id, initial_msg=None, interval=10):
+        self.chat_id = chat_id
+        self.interval = interval
+        self.initial_msg = initial_msg
+        self.task = None
+        self.done = asyncio.Event()
+        self.step = 0
+    
+    async def _run(self):
+        if self.initial_msg:
+            try: await client.send_message(self.chat_id, self.initial_msg)
+            except: pass
+        while not self.done.is_set():
+            try:
+                await asyncio.wait_for(self.done.wait(), timeout=self.interval)
+                return
+            except asyncio.TimeoutError:
+                pass
+            if self.step < len(self.MESSAGES):
+                msg = self.MESSAGES[self.step]
+                elapsed = (self.step + 1) * self.interval
+                if self.step >= 3:
+                    msg = msg + f" ({elapsed}s)"
+                self.step += 1
+                try:
+                    await client.send_message(self.chat_id, msg)
+                    await client.action(self.chat_id, "typing")
+                except: pass
+    
+    def start(self):
+        self.task = asyncio.create_task(self._run())
+    
+    async def stop(self):
+        self.done.set()
+        if self.task:
+            try: await asyncio.wait_for(self.task, timeout=2)
+            except: pass
 
-# ============ Helper functions ============
-async def cache_chat_name(chat_id):
+# ============ Helpers ============
+async def cache_chat_name(chat_id, force=False):
+    if not force and chat_id in chat_names_cache and not str(chat_names_cache[chat_id]).isdigit():
+        return chat_names_cache[chat_id]
     try:
         entity = await client.get_entity(chat_id)
         name = getattr(entity, "first_name", None) or getattr(entity, "title", None) or str(chat_id)
         chat_names_cache[chat_id] = name
+        return name
     except:
-        chat_names_cache[chat_id] = str(chat_id)
+        if chat_id not in chat_names_cache:
+            chat_names_cache[chat_id] = str(chat_id)
+        return chat_names_cache[chat_id]
 
 def get_pause_duration(chat_id):
     return custom_pause_durations.get(chat_id, runtime_settings["pause_duration"])
@@ -131,33 +179,33 @@ def track_sender(chat_id, name, is_bot=False, is_group=False):
         dm_senders = dm_senders[:30]
         dm_dirty = True
 
-async def get_last_incoming_text(chat_id):
-    """متن آخرین پیام دریافتی"""
+async def forward_last_incoming(chat_id):
+    """فوروارد آخرین پیام دریافتی"""
     try:
-        messages = await client.get_messages(chat_id, limit=10)
+        messages = await client.get_messages(chat_id, limit=20)
         for m in messages:
             if not m.out:
-                return m.text or "[رسانه/ویس/عکس]"
-        return None
-    except:
-        return None
+                await client.forward_messages("me", m)
+                return True
+        return False
+    except Exception as e:
+        log(f"⚠️ Fwd incoming: {str(e)[:80]}")
+        return False
 
-async def get_last_outgoing_text(chat_id):
-    """متن آخرین پاسخ ربات (یا خودت)"""
+async def forward_last_outgoing(chat_id):
+    """فوروارد آخرین پیام ارسالی (پاسخ ربات)"""
     try:
-        messages = await client.get_messages(chat_id, limit=10)
+        messages = await client.get_messages(chat_id, limit=20)
         for m in messages:
             if m.out:
-                return m.text or "[رسانه/ویس/عکس]"
-        # fallback به cache
-        if chat_id in bot_last_replies:
-            return bot_last_replies[chat_id]["text"]
-        return None
-    except:
-        return None
+                await client.forward_messages("me", m)
+                return True
+        return False
+    except Exception as e:
+        log(f"⚠️ Fwd outgoing: {str(e)[:80]}")
+        return False
 
 async def get_last_messages_text(chat_id, count=5):
-    """متن N پیام آخر"""
     try:
         messages = await client.get_messages(chat_id, limit=count)
         if not messages: return "هیچ پیامی نیست"
@@ -199,10 +247,9 @@ async def populate_senders_from_telegram(limit=15, include_all=False):
         results.sort(key=lambda x: x["timestamp"], reverse=True)
         if include_all:
             all_senders = results[:limit]; all_dirty = True
-            log(f"📥 ALL: {len(all_senders)}")
         else:
             dm_senders = results[:limit]; dm_dirty = True
-            log(f"📥 DM: {len(dm_senders)}")
+        log(f"📥 Populated {len(results[:limit])} ({'ALL' if include_all else 'DM'})")
         return len(results[:limit])
     except Exception as e:
         log(f"⚠️ Populate: {str(e)[:100]}")
@@ -251,7 +298,7 @@ def build_paused_section():
 def build_dm_senders_section():
     if not dm_senders:
         return "=== DM SENDERS ===\n❌ خالی. اگه پرسید، [POPULATE_DM_SENDERS]"
-    lines = ["=== DM SENDERS (فقط خصوصی — برای سوال «بهت پیام داد») ==="]
+    lines = ["=== DM SENDERS (فقط خصوصی — برای «بهت پیام داد») ==="]
     for i, it in enumerate(dm_senders[:10], 1):
         ago = int(time.time() - it["timestamp"])
         lines.append(f"{i}. {it['name']} (id:{it['chat_id']}) — {ago//60}د {ago%60}ث")
@@ -260,7 +307,7 @@ def build_dm_senders_section():
 def build_all_senders_section():
     if not all_senders:
         return "=== ALL CHATS ===\n❌ خالی. اگه پرسید، [POPULATE_ALL_SENDERS]"
-    lines = ["=== ALL CHATS (همه — برای سوال «کلی») ==="]
+    lines = ["=== ALL CHATS (همه — برای «کلی») ==="]
     for i, it in enumerate(all_senders[:10], 1):
         ago = int(time.time() - it["timestamp"])
         kind = "bot" if it.get("is_bot") else ("group" if it.get("is_group") else "DM")
@@ -289,7 +336,6 @@ def build_global_mute_section():
         return f"=== MUTED ===\n{r//60}د {r%60}ث"
     return ""
 
-# ============ Forward ============
 async def forward_last_messages(chat_id, count=1):
     try:
         messages = await client.get_messages(chat_id, limit=count * 3)
@@ -362,7 +408,6 @@ def save_senders_if_dirty():
         all_dirty = False
 
 memory, _sha = fetch_memory()
-
 if memory.get("dm_senders"):
     dm_senders = list(memory["dm_senders"])
     log(f"📥 Loaded {len(dm_senders)} DM")
@@ -383,10 +428,19 @@ def set_voice_pref(key, value):
     save_memory_async()
 
 def build_owner_info():
-    info = OWNER_INFO_BASE
+    info = """
+Name: Poryia Rahmani
+Nickname: Poryia
+Age group: Teenager / student
+Location: Iran
+Status: Student
+Interests: Bodybuilding, computers, AI, coding
+Current projects: AI assistant, VPN app
+Personality: Young, ambitious, hardworking
+"""
     facts = memory.get("learned_facts", {})
     if facts:
-        info += "\n\n=== Facts ===\n"
+        info += "\n=== Facts ===\n"
         for k, v in facts.items(): info += f"- {k}: {v}\n"
     return info
 
@@ -423,55 +477,78 @@ def build_prompt(user_id, new_message, is_owner=False):
 {build_personality_section()}
 
 === TAGS ===
-
 [LEARN: k | v] · [LEARN_RAW: t] · [FORGET: k] · [SHOW_MEMORY]
 [PAUSE: target | min] · [PAUSE_FOREVER: target] · [UNPAUSE: target] · [UNPAUSE_ALL]
-[FORWARD: target | n] · [FORWARD_LAST | n]
-[CONTEXT: target]
+[FORWARD: target | n] · [FORWARD_LAST | n] · [CONTEXT: target]
 [POPULATE_DM_SENDERS] · [WHO_LAST_DM]
 [POPULATE_ALL_SENDERS] · [WHO_LAST_ALL]
-[SHOW_LAST_INCOMING: target] — نمایش متن آخرین پیام دریافتی
-[SHOW_LAST_OUTGOING: target] — نمایش متن آخرین پاسخ ربات
-[SHOW_MSG: target | n] — نمایش n پیام آخر
+[SHOW_LAST_INCOMING: target] — فوروارد آخرین پیام کاربر
+[SHOW_LAST_OUTGOING: target] — فوروارد آخرین پاسخ ربات
+[SHOW_MSG: target | n]
 [GLOBAL_MUTE: min] · [GLOBAL_UNMUTE]
 [RULE_ADD: t] · [RULE_REMOVE: i] · [RULE_LIST] · [RULE_CLEAR]
 [PERSONALITY_SET: t] · [PERSONALITY_CLEAR] · [PERSONALITY_SHOW]
 
-=== ⚠️⚠️⚠️ CRITICAL DECISION RULES ⚠️⚠️⚠️ ===
+=== ⚠️⚠️⚠️ CRITICAL — INCOMING vs OUTGOING ⚠️⚠️⚠️ ===
 
-**1. DISTINGUISH DM vs ALL:**
-- "آخرین نفری که **بهت** پیام داد" / "آخرین DM" / "کی بهت پیام داد" → **DM only** (dm_senders section)
-- "**کلی**" / "توی **همه** چت‌هام" / "همه جا" / "آخرین پیام **دریافت شده**" → **ALL chats** (all_senders section)
+This is the MOST IMPORTANT distinction. Read carefully:
 
-⚠️ When in doubt → ASK: "منظورت DM هست یا کلی (گروه/کانال/bot هم)؟"
+📥 **INCOMING** = پیام کاربر (طرف مقابل)
+   Trigger words:
+   - "چی **نوشته**؟"  (has "ه" at end — third person)
+   - "چی **گفت**؟"
+   - "**پیامش** چی بود؟"
+   - "**پیام کاربر** چی بود؟"
+   - "**اون** چی گفت؟"
+   - "**چه پیامی** داد؟"
+   → Use [SHOW_LAST_INCOMING: target]
 
-**2. If user asks "چی بوده" / "چی گفت" / "محتواش چیه":**
-→ You MUST output [SHOW_LAST_INCOMING: target] to fetch actual text
-→ DO NOT just say "می‌خوای بیارم؟" — JUST SHOW IT
+📤 **OUTGOING** = پاسخ ربات (خودت)
+   Trigger words:
+   - "**تو** چی **نوشتی**؟"  (has "ی" at end — second person "you")
+   - "**تو** چی **گفتی**؟"
+   - "**جواب تو** چی بود؟"
+   - "**پاسخ تو** چی بود؟"
+   - "**تو** چی **جواب** دادی؟"
+   - "**دستیار** چی گفت؟"
+   → Use [SHOW_LAST_OUTGOING: target]
 
-**3. If user asks "تو چی جواب دادی" / "جواب تو چی بود":**
-→ Output [SHOW_LAST_OUTGOING: target]
-→ NEVER say "من جواب ندادم" without checking first
+🚨 Key insight:
+   - "نوشت**ه**" / "گف**ت**" / "پیام**ش**" = THEM = INCOMING
+   - "نوشت**ی**" / "گف**ت**ی" / "جواب **تو**" = YOU = OUTGOING
+   - One letter difference!
 
-**4. If user asks "بیشتر" / "چند تا" / "نشونم بده":**
-→ Use [SHOW_MSG: target | 5] to show multiple messages
+📋 Examples:
+   User: "چی نوشته؟" → [SHOW_LAST_INCOMING: علی]
+   User: "چی نوشتی؟" → [SHOW_LAST_OUTGOING: علی]
+   User: "چی نوشته چی نوشتی؟" → BOTH tags on separate lines:
+      [SHOW_LAST_INCOMING: علی]
+      [SHOW_LAST_OUTGOING: علی]
+   User: "تو چی جواب دادی؟" → [SHOW_LAST_OUTGOING: علی]
+   User: "پیامش چی بود؟" → [SHOW_LAST_INCOMING: علی]
 
-**5. NEVER promise without action:**
+⚠️ These tags will FORWARD the actual message (not text). Don't say "متنش اینه".
+
+=== OTHER CRITICAL RULES ===
+
+**DM vs ALL:**
+- "آخرین نفری که **بهت** پیام داد" → DM (dm_senders)
+- "**کلی**" / "همه چت‌هام" → ALL (all_senders)
+
+**"بیشتر" / "چند تا":**
+→ [SHOW_MSG: target | 5]
+
+**NEVER promise without action:**
 - ❌ "الان می‌فرستم" (بدون tag)
 - ✅ "باشه 📨\n[FORWARD_LAST | 1]"
 
-**6. When user says "اره" / "باشه" / "بله" after you OFFERED something:**
-→ DO IT NOW with the tag. Don't ask again.
+**User says "اره"/"باشه" after offer → DO IT with tag**
 
-**7. Only save memory when "یادت باشه..." / "فراموش کن..."**
+**Only save memory when "یادت باشه..." / "فراموش کن..."**
 
-**8. If user asks a general QUESTION → JUST ANSWER, no tag.**
-Examples:
-- "چطوری؟" → answer, NO tag
-- "مگه من سازنده تو نیستم؟" → answer, NO tag
-- "چه چیزایی بلدی؟" → list, NO tag
+**General question → JUST ANSWER, no tag.**
 
-**9. DON'T repeat actions from RECENT ACTIONS.**
+**DON'T repeat actions from RECENT ACTIONS**
 
 {vblock}
 
@@ -505,32 +582,40 @@ Only {OWNER_NAME} can teach. Voice request ≠ teaching.
 You:"""
     return prompt
 
-async def ask_gemini(prompt, chat_id=None):
-    started = time.time()
-    round_num = 0
-    while True:
-        round_num += 1
-        for model_name in MODELS:
-            try:
-                result = ai.models.generate_content(model=model_name, contents=prompt)
-                raw = (result.text or "").strip()
-                if raw:
-                    log(f"✅ {model_name} (r{round_num}, {int(time.time()-started)}s)")
-                    return raw, None
-            except Exception as e:
-                es = str(e)
-                if "429" in es or "RESOURCE_EXHAUSTED" in es: log(f"⏸️ {model_name}: quota")
-                elif "503" in es: log(f"⏳ {model_name}: busy")
-                elif "404" in es: log(f"❌ {model_name}: not found")
-                else: log(f"❌ {model_name}: {es[:80]}")
-                continue
-        if time.time() - started > runtime_settings.get("max_retry_time", 300):
-            return None, None
-        delay = RETRY_DELAYS[min(round_num - 1, len(RETRY_DELAYS) - 1)]
-        if chat_id:
-            try: await client.action(chat_id, "typing")
-            except: pass
-        await asyncio.sleep(delay)
+async def ask_gemini(prompt, chat_id=None, with_progress=False, progress_initial=None):
+    progress = None
+    if with_progress and chat_id:
+        progress = ProgressReporter(chat_id, progress_initial, interval=12)
+        progress.start()
+    try:
+        started = time.time()
+        round_num = 0
+        while True:
+            round_num += 1
+            for model_name in MODELS:
+                try:
+                    result = ai.models.generate_content(model=model_name, contents=prompt)
+                    raw = (result.text or "").strip()
+                    if raw:
+                        log(f"✅ {model_name} (r{round_num}, {int(time.time()-started)}s)")
+                        return raw, None
+                except Exception as e:
+                    es = str(e)
+                    if "429" in es or "RESOURCE_EXHAUSTED" in es: log(f"⏸️ {model_name}: quota")
+                    elif "503" in es: log(f"⏳ {model_name}: busy")
+                    elif "404" in es: log(f"❌ {model_name}: not found")
+                    else: log(f"❌ {model_name}: {es[:80]}")
+                    continue
+            if time.time() - started > runtime_settings.get("max_retry_time", 300):
+                return None, None
+            delay = RETRY_DELAYS[min(round_num - 1, len(RETRY_DELAYS) - 1)]
+            if chat_id:
+                try: await client.action(chat_id, "typing")
+                except: pass
+            await asyncio.sleep(delay)
+    finally:
+        if progress:
+            await progress.stop()
 
 async def send_alert(text):
     if not NTFY_TOPIC: return
@@ -614,7 +699,6 @@ async def send_voice_reply(chat_id, reply_to_id, text):
 
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
-
 # ============ REST API ============
 CORS = {"Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers": "X-API-Key, Content-Type", "Access-Control-Allow-Methods": "GET, POST, OPTIONS"}
 
@@ -659,10 +743,10 @@ async def api_paused(req):
         rem = pause_remaining(cid)
         if rem > 0:
             name = chat_names_cache.get(cid)
-            if not name:
+            if not name or str(name).isdigit():
                 try:
                     e = await client.get_entity(cid)
-                    name = getattr(e, "first_name", None) or getattr(e, "title", None)
+                    name = getattr(e, "first_name", None) or getattr(e, "title", None) or str(cid)
                     chat_names_cache[cid] = name
                 except: pass
             out.append({"chat_id": cid, "name": name, "remaining_seconds": rem})
@@ -718,8 +802,7 @@ def create_app():
     app.router.add_get("/api/facts", api_facts)
     return app
 
-
-# ============ Owner activity ============
+# ============ Owner handlers ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_activity(event):
     if not event.is_private: return
@@ -732,7 +815,6 @@ async def on_owner_activity(event):
     log(f"🛑 Paused {event.chat_id} {rem//60}m")
 
 
-# ============ Owner handler ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_message(event):
     global global_mute_until, last_bot_send_time
@@ -757,22 +839,63 @@ async def on_owner_message(event):
     log(f"🔍 Owner: {text[:50]!r}")
 
     prompt = build_prompt("owner", text, is_owner=True)
-    raw, _ = await ask_gemini(prompt, chat_id=event.chat_id)
+    raw, _ = await ask_gemini(prompt, chat_id=event.chat_id, with_progress=True)
     if raw is None:
-        await event.reply("الان نشد، دوباره بفرست 🙏"); return
+        await event.reply("❌ متأسفم، الان نشد. دوباره بفرست 🙏"); return
+
+    # ===== SHOW_LAST_INCOMING + SHOW_LAST_OUTGOING (handle BOTH) =====
+    has_in = "[SHOW_LAST_INCOMING:" in raw
+    has_out = "[SHOW_LAST_OUTGOING:" in raw
+    if has_in or has_out:
+        target = None
+        if has_in:
+            target = re.search(r"\[SHOW_LAST_INCOMING:\s*([^\]]+)\]", raw).group(1).strip()
+        elif has_out:
+            target = re.search(r"\[SHOW_LAST_OUTGOING:\s*([^\]]+)\]", raw).group(1).strip()
+        
+        cid = await resolve_chat_id(target)
+        if cid is None:
+            await event.reply(f"❓ «{target}» پیدا نشد"); return
+        
+        # Force refresh name if it's numeric
+        name = await cache_chat_name(cid, force=True)
+        
+        progress = ProgressReporter(event.chat_id, f"⏳ دارم پیام‌های {name} رو فوروارد می‌کنم...", interval=10)
+        progress.start()
+        forwarded_parts = []
+        try:
+            if has_in:
+                ok = await forward_last_incoming(cid)
+                if ok: forwarded_parts.append("📩 پیام کاربر")
+            if has_out:
+                ok = await forward_last_outgoing(cid)
+                if ok: forwarded_parts.append("🤖 پاسخ ربات")
+        finally:
+            await progress.stop()
+        
+        if forwarded_parts:
+            await event.reply(f"⬆️ فوروارد شد از **{name}**:\n" + "\n".join(forwarded_parts))
+        else:
+            await event.reply(f"❓ چیزی برای فوروارد پیدا نشد")
+        return
 
     # ===== POPULATE_DM_SENDERS =====
     if "[POPULATE_DM_SENDERS]" in raw:
-        await event.reply("⏳ دارم DM ها رو می‌خونم...")
-        count = await populate_senders_from_telegram(include_all=False)
-        save_senders_if_dirty()
+        progress = ProgressReporter(event.chat_id, "⏳ دارم چت‌های خصوصیت رو از تلگرام می‌خونم...", interval=10)
+        progress.start()
+        try:
+            count = await populate_senders_from_telegram(include_all=False)
+            save_senders_if_dirty()
+        finally:
+            await progress.stop()
         if count == 0:
             await event.reply("❓ DM با پیام دریافتی پیدا نکردم")
         else:
+            await event.reply(f"✅ {count} چت پیدا شد، دارم جواب رو می‌سازم...")
             prompt2 = build_prompt("owner", text + " [DM لود شد]", is_owner=True)
-            raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id)
+            raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id, with_progress=True)
             if raw2:
-                r = re.sub(r"\[(POPULATE_DM_SENDERS|WHO_LAST_DM|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw2).strip()
+                r = re.sub(r"\[(POPULATE_DM_SENDERS|WHO_LAST_DM|SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw2).strip()
                 if r:
                     last_bot_send_time = time.time()
                     await event.reply(r); return
@@ -785,16 +908,21 @@ async def on_owner_message(event):
 
     # ===== POPULATE_ALL_SENDERS =====
     if "[POPULATE_ALL_SENDERS]" in raw:
-        await event.reply("⏳ دارم همه چت‌ها رو می‌خونم...")
-        count = await populate_senders_from_telegram(include_all=True)
-        save_senders_if_dirty()
+        progress = ProgressReporter(event.chat_id, "⏳ دارم همه چت‌ها رو می‌خونم...", interval=10)
+        progress.start()
+        try:
+            count = await populate_senders_from_telegram(include_all=True)
+            save_senders_if_dirty()
+        finally:
+            await progress.stop()
         if count == 0:
             await event.reply("❓ پیام دریافتی پیدا نکردم")
         else:
+            await event.reply(f"✅ {count} چت پیدا شد، دارم جواب رو می‌سازم...")
             prompt2 = build_prompt("owner", text + " [ALL لود شد]", is_owner=True)
-            raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id)
+            raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id, with_progress=True)
             if raw2:
-                r = re.sub(r"\[(POPULATE_ALL_SENDERS|WHO_LAST_ALL|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw2).strip()
+                r = re.sub(r"\[(POPULATE_ALL_SENDERS|WHO_LAST_ALL|SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw2).strip()
                 if r:
                     last_bot_send_time = time.time()
                     await event.reply(r); return
@@ -809,7 +937,10 @@ async def on_owner_message(event):
     # ===== WHO_LAST_DM =====
     if "[WHO_LAST_DM]" in raw:
         if not dm_senders:
-            await populate_senders_from_telegram(include_all=False)
+            progress = ProgressReporter(event.chat_id, "⏳ دارم DM ها رو چک می‌کنم...", interval=10)
+            progress.start()
+            try: await populate_senders_from_telegram(include_all=False)
+            finally: await progress.stop()
         if not dm_senders:
             await event.reply("❓ DM پیدا نشد"); return
         last = dm_senders[0]
@@ -820,41 +951,16 @@ async def on_owner_message(event):
     # ===== WHO_LAST_ALL =====
     if "[WHO_LAST_ALL]" in raw:
         if not all_senders:
-            await populate_senders_from_telegram(include_all=True)
+            progress = ProgressReporter(event.chat_id, "⏳ دارم همه چت‌ها رو چک می‌کنم...", interval=10)
+            progress.start()
+            try: await populate_senders_from_telegram(include_all=True)
+            finally: await progress.stop()
         if not all_senders:
             await event.reply("❓ پیام پیدا نشد"); return
         last = all_senders[0]
         ago = int(time.time() - last["timestamp"])
         kind = "bot" if last.get("is_bot") else ("group" if last.get("is_group") else "DM")
         await event.reply(f"🌐 **{last['name']}** ({kind}) — {ago//60}د {ago%60}ث پیش")
-        return
-
-    # ===== SHOW_LAST_INCOMING =====
-    m = re.search(r"\[SHOW_LAST_INCOMING:\s*([^\]]+)\]", raw)
-    if m:
-        target = m.group(1).strip()
-        cid = await resolve_chat_id(target)
-        if cid is None:
-            await event.reply(f"❓ «{target}» پیدا نشد"); return
-        name = chat_names_cache.get(cid, str(cid))
-        content = await get_last_incoming_text(cid)
-        if not content:
-            await event.reply(f"❓ پیام دریافتی از «{name}» پیدا نشد"); return
-        await event.reply(f"📩 آخرین پیام از **{name}**:\n\n{content}")
-        return
-
-    # ===== SHOW_LAST_OUTGOING =====
-    m = re.search(r"\[SHOW_LAST_OUTGOING:\s*([^\]]+)\]", raw)
-    if m:
-        target = m.group(1).strip()
-        cid = await resolve_chat_id(target)
-        if cid is None:
-            await event.reply(f"❓ «{target}» پیدا نشد"); return
-        name = chat_names_cache.get(cid, str(cid))
-        content = await get_last_outgoing_text(cid)
-        if not content:
-            await event.reply(f"ℹ️ هیچ پاسخ ارسالی به «{name}» پیدا نشد"); return
-        await event.reply(f"🤖 آخرین پاسخ به **{name}**:\n\n{content}")
         return
 
     # ===== SHOW_MSG =====
@@ -865,8 +971,13 @@ async def on_owner_message(event):
         cid = await resolve_chat_id(target)
         if cid is None:
             await event.reply(f"❓ «{target}» پیدا نشد"); return
-        name = chat_names_cache.get(cid, str(cid))
-        content = await get_last_messages_text(cid, count)
+        name = await cache_chat_name(cid, force=True)
+        progress = ProgressReporter(event.chat_id, f"⏳ دارم {count} پیام آخر {name} رو می‌گیرم...", interval=10)
+        progress.start()
+        try:
+            content = await get_last_messages_text(cid, count)
+        finally:
+            await progress.stop()
         await event.reply(f"📜 **{name}** — {count} پیام آخر:\n\n{content}")
         return
 
@@ -887,7 +998,7 @@ async def on_owner_message(event):
         cid = await resolve_chat_id(target)
         if cid is None:
             await event.reply(f"❓ «{target}» پیدا نشد"); return
-        name = chat_names_cache.get(cid, str(cid))
+        name = await cache_chat_name(cid, force=True)
         if cid in owner_last_seen:
             del owner_last_seen[cid]; custom_pause_durations.pop(cid, None)
             track_action("UNPAUSE", cid, name)
@@ -906,8 +1017,7 @@ async def on_owner_message(event):
         if cid:
             owner_last_seen[cid] = time.time()
             custom_pause_durations[cid] = 10 * 365 * 24 * 3600
-            await cache_chat_name(cid)
-            name = chat_names_cache.get(cid, str(cid))
+            name = await cache_chat_name(cid, force=True)
             track_action("PAUSE_FOREVER", cid, name)
             r = re.sub(r"\[(PAUSE_FOREVER:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
             if not r: r = f"🛑 «{name}» دائمی"
@@ -925,8 +1035,7 @@ async def on_owner_message(event):
         if cid:
             owner_last_seen[cid] = time.time()
             custom_pause_durations[cid] = mins * 60
-            await cache_chat_name(cid)
-            name = chat_names_cache.get(cid, str(cid))
+            name = await cache_chat_name(cid, force=True)
             track_action("PAUSE", cid, f"{name} {mins}m")
             r = re.sub(r"\[(PAUSE:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
             if not r: r = f"🛑 «{name}» {mins}د"
@@ -940,16 +1049,24 @@ async def on_owner_message(event):
     if m:
         count = min(int(m.group(1)) if m.group(1) else 1, 20)
         if not dm_senders:
-            await populate_senders_from_telegram(include_all=False)
+            progress = ProgressReporter(event.chat_id, "⏳ دارم دنبال آخرین DM می‌گردم...", interval=10)
+            progress.start()
+            try: await populate_senders_from_telegram(include_all=False)
+            finally: await progress.stop()
         if not dm_senders:
             await event.reply("❓ DM نبود"); return
         last = dm_senders[0]
-        fwd, err = await forward_last_messages(last["chat_id"], count)
+        progress = ProgressReporter(event.chat_id, f"⏳ دارم {count} پیام از {last['name']} فوروارد می‌کنم...", interval=10)
+        progress.start()
+        try:
+            fwd, err = await forward_last_messages(last["chat_id"], count)
+        finally:
+            await progress.stop()
         if err: await event.reply(f"❌ {err}")
         else:
             track_action("FORWARD_LAST", last["chat_id"], last["name"])
             r = re.sub(r"\[(FORWARD_LAST[^\]]*|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-            if not r: r = f"📨 {fwd} از «{last['name']}»"
+            if not r: r = f"📨 {fwd} پیام از «{last['name']}» فوروارد شد"
             last_bot_send_time = time.time()
             await event.reply(r)
         return
@@ -961,13 +1078,18 @@ async def on_owner_message(event):
         count = min(int(m.group(2)) if m.group(2) else 1, 20)
         cid = await resolve_chat_id(target)
         if cid:
-            fwd, err = await forward_last_messages(cid, count)
-            name = chat_names_cache.get(cid, str(cid))
+            name = await cache_chat_name(cid, force=True)
+            progress = ProgressReporter(event.chat_id, f"⏳ دارم {count} پیام از {name} فوروارد می‌کنم...", interval=10)
+            progress.start()
+            try:
+                fwd, err = await forward_last_messages(cid, count)
+            finally:
+                await progress.stop()
             if err: await event.reply(f"❌ {err}")
             else:
                 track_action("FORWARD", cid, f"{name} {fwd}")
                 r = re.sub(r"\[(FORWARD:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-                if not r: r = f"📨 {fwd} از «{name}»"
+                if not r: r = f"📨 {fwd} پیام از «{name}» فوروارد شد"
                 last_bot_send_time = time.time()
                 await event.reply(r)
         else: await event.reply(f"❓ «{target}» پیدا نشد")
@@ -979,8 +1101,13 @@ async def on_owner_message(event):
         target = m.group(1).strip()
         cid = await resolve_chat_id(target)
         if cid:
-            ctx = await get_last_messages_text(cid, 5)
-            name = chat_names_cache.get(cid, str(cid))
+            name = await cache_chat_name(cid, force=True)
+            progress = ProgressReporter(event.chat_id, f"⏳ دارم پیام‌های {name} رو می‌گیرم...", interval=10)
+            progress.start()
+            try:
+                ctx = await get_last_messages_text(cid, 5)
+            finally:
+                await progress.stop()
             await event.reply(f"👁️ {name}:\n\n{ctx}")
         else: await event.reply(f"❓ «{target}» پیدا نشد")
         return
@@ -992,7 +1119,7 @@ async def on_owner_message(event):
         global_mute_until = time.time() + mins * 60
         track_action("GLOBAL_MUTE", f"{mins}m")
         r = re.sub(r"\[(GLOBAL_MUTE:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-        if not r: r = f"🔇 {mins}د"
+        if not r: r = f"🔇 {mins} دقیقه ساکت شدم"
         last_bot_send_time = time.time()
         await event.reply(r); return
 
@@ -1000,11 +1127,11 @@ async def on_owner_message(event):
     if "[GLOBAL_UNMUTE]" in raw:
         global_mute_until = 0
         r = re.sub(r"\[(GLOBAL_UNMUTE|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-        if not r: r = "🔊 آنمیوت"
+        if not r: r = "🔊 آنمیوت شدم"
         last_bot_send_time = time.time()
         await event.reply(r); return
 
-    # ===== Rules/Personality =====
+    # ===== Rules =====
     m = re.search(r"\[RULE_ADD:\s*([^\]]+)\]", raw)
     if m:
         rule = m.group(1).strip()
@@ -1013,7 +1140,7 @@ async def on_owner_message(event):
             memory["custom_rules"].append(rule)
             save_memory_async(); track_action("RULE_ADD", rule[:40])
         r = re.sub(r"\[(RULE_ADD:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-        if not r: r = f"✅ #{len(memory['custom_rules'])}\n📏 {rule}"
+        if not r: r = f"✅ قانون #{len(memory['custom_rules'])}\n📏 {rule}"
         last_bot_send_time = time.time()
         await event.reply(r); return
 
@@ -1022,8 +1149,7 @@ async def on_owner_message(event):
         idx = int(m.group(1)) - 1
         rules = memory.get("custom_rules", [])
         if 0 <= idx < len(rules):
-            removed = rules.pop(idx)
-            save_memory_async()
+            removed = rules.pop(idx); save_memory_async()
             r = re.sub(r"\[(RULE_REMOVE:\d+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
             if not r: r = f"🗑️ {removed}"
             last_bot_send_time = time.time()
@@ -1033,32 +1159,29 @@ async def on_owner_message(event):
 
     if "[RULE_LIST]" in raw:
         rules = memory.get("custom_rules", [])
-        if not rules: await event.reply("📏 هیچ"); return
+        if not rules: await event.reply("📏 هیچ قانونی نیست"); return
         await event.reply("📏 **قوانین:**\n" + "\n".join(f"{i}. {r}" for i, r in enumerate(rules, 1)))
         return
 
     if "[RULE_CLEAR]" in raw:
         c = len(memory.get("custom_rules", []))
-        memory["custom_rules"] = []
-        save_memory_async()
+        memory["custom_rules"] = []; save_memory_async()
         r = re.sub(r"\[(RULE_CLEAR|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-        if not r: r = f"🧹 {c} پاک شد"
+        if not r: r = f"🧹 {c} قانون پاک شد"
         last_bot_send_time = time.time()
         await event.reply(r); return
 
     m = re.search(r"\[PERSONALITY_SET:\s*([^\]]+)\]", raw)
     if m:
         p = m.group(1).strip()
-        memory["personality_override"] = p
-        save_memory_async()
+        memory["personality_override"] = p; save_memory_async()
         r = re.sub(r"\[(PERSONALITY_SET:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-        if not r: r = f"🎭 {p}"
+        if not r: r = f"🎭 شخصیت تغییر کرد:\n{p}"
         last_bot_send_time = time.time()
         await event.reply(r); return
 
     if "[PERSONALITY_CLEAR]" in raw:
-        memory["personality_override"] = ""
-        save_memory_async()
+        memory["personality_override"] = ""; save_memory_async()
         r = re.sub(r"\[(PERSONALITY_CLEAR|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
         if not r: r = "🎭 پیش‌فرض"
         last_bot_send_time = time.time()
@@ -1076,7 +1199,7 @@ async def on_owner_message(event):
                 memory.setdefault("learned_facts", {})[k.strip()] = v.strip()
                 save_memory_async()
                 last_bot_send_time = time.time()
-                await event.reply(f"✅ {k.strip()} → {v.strip()}")
+                await event.reply(f"✅ گرفتم: {k.strip()} → {v.strip()}")
                 return
         except: pass
 
@@ -1087,7 +1210,7 @@ async def on_owner_message(event):
             memory.setdefault("learned_facts", {})[fid] = inner
             save_memory_async()
             last_bot_send_time = time.time()
-            await event.reply(f"✅ {inner}")
+            await event.reply(f"✅ گرفتم: {inner}")
             return
         except: pass
 
@@ -1098,10 +1221,10 @@ async def on_owner_message(event):
             if k in facts:
                 del facts[k]; save_memory_async()
                 last_bot_send_time = time.time()
-                await event.reply(f"🗑️ {k}")
+                await event.reply(f"🗑️ فراموش: {k}")
             else:
                 last_bot_send_time = time.time()
-                await event.reply(f"❓ {k}")
+                await event.reply(f"❓ {k} نبود")
             return
         except: pass
 
@@ -1128,23 +1251,21 @@ async def on_owner_message(event):
         await send_voice_reply(event.chat_id, event.message.id, reply)
 
 
-# ============ Incoming handler (tracks all + replies to DM) ============
+# ============ Incoming handler ============
 @client.on(events.NewMessage(incoming=True))
 async def on_incoming(event):
     try: sender = await event.get_sender()
     except: sender = None
     if sender is None or sender.id == OWNER_ID: return
 
-    # Track ALL chats
     if event.is_private:
         sname = getattr(sender, "first_name", "") or getattr(sender, "username", "") or str(sender.id)
         track_sender(sender.id, sname, is_bot=getattr(sender, "bot", False), is_group=False)
-        # Don't reply to bots
         if getattr(sender, "bot", False): return
     else:
         title = getattr(event.chat, "title", None) or str(event.chat_id)
         track_sender(event.chat_id, title, is_bot=False, is_group=True)
-        return  # skip groups for replies
+        return
 
     if is_globally_muted(): return
     if is_owner_paused(event.chat_id): return
@@ -1177,8 +1298,6 @@ async def on_incoming(event):
     if not reply: return
 
     histories.setdefault(user_key, []).append(f"You: {reply}")
-
-    # Store bot reply for later "what did you say" queries
     bot_last_replies[event.chat_id] = {"text": reply, "ts": time.time()}
 
     await event.reply(reply)
