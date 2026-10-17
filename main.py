@@ -100,9 +100,25 @@ Notes:
 
 # ============ Pause cache ============
 owner_last_seen = {}
+chat_names_cache = {}  # chat_id → name
+
+async def cache_chat_name(chat_id):
+    """گرفتن اسم چت و ذخیره توی کش"""
+    try:
+        entity = await client.get_entity(chat_id)
+        name = getattr(entity, "first_name", None) or getattr(entity, "title", None) or str(chat_id)
+        chat_names_cache[chat_id] = name
+    except Exception as e:
+        chat_names_cache[chat_id] = str(chat_id)
+        log(f"⚠️ Could not fetch name for {chat_id}: {e}")
 
 def mark_owner_active(chat_id):
     owner_last_seen[chat_id] = time.time()
+    if chat_id not in chat_names_cache:
+        try:
+            asyncio.create_task(cache_chat_name(chat_id))
+        except:
+            pass
 
 def is_owner_paused(chat_id):
     if not runtime_settings["pause_enabled"]:
@@ -117,6 +133,23 @@ def pause_remaining(chat_id):
     if last == 0:
         return 0
     return max(0, int(runtime_settings["pause_duration"] - (time.time() - last)))
+
+def build_paused_section():
+    """ساخت بخش چت‌های pause شده برای پرامپت"""
+    if not owner_last_seen:
+        return "=== PAUSED CHATS ===\nهیچ چتی pause نیست."
+    
+    lines = ["=== PAUSED CHATS (current) ==="]
+    for chat_id in list(owner_last_seen.keys()):
+        remaining = pause_remaining(chat_id)
+        if remaining > 0:
+            name = chat_names_cache.get(chat_id, "نامشخص")
+            lines.append(f"- نام: {name} | chat_id: {chat_id} | باقی‌مونده: {remaining//60} دقیقه و {remaining%60} ثانیه")
+    
+    if len(lines) == 1:
+        return "=== PAUSED CHATS ===\nهیچ چتی pause نیست."
+    
+    return "\n".join(lines)
 
 # ============ GitHub Memory ============
 def github_headers():
@@ -238,12 +271,15 @@ def build_prompt(user_id, new_message, is_owner=False):
     if is_owner:
         vpref = get_voice_pref("owner")
         vblock = voice_status_block(vpref, is_owner=True)
+        paused_section = build_paused_section()
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You are talking to {OWNER_NAME} THEMSELVES in their Saved Messages.
 This is your boss. Be warm, friendly, casual — like a close friend.
 
 === About your boss ===
 {build_owner_info()}
+
+{paused_section}
 
 === SPECIAL POWERS ===
 You can secretly modify your own memory. Output ONLY the tag on a single line:
@@ -253,9 +289,37 @@ You can secretly modify your own memory. Output ONLY the tag on a single line:
 [FORGET: key]             — forget a fact
 [SHOW_MEMORY]             — show everything
 
+=== PAUSE MANAGEMENT ===
+You can also unpause chats that are currently paused (see PAUSED CHATS section above).
+
+When the owner asks to unpause/cancel/resume a specific chat:
+- Persian examples: "پاز علی رو لغو کن"، "مکث علی رو بردار"، "علی رو آزاد کن"، "پاز اون چت رو لغو کن"
+- English examples: "unpause Ali", "resume chat with Ali", "cancel pause for Ali"
+→ Find the matching chat in PAUSED CHATS by name (fuzzy match is OK).
+→ Output tag: [UNPAUSE: chat_id]  (using the numeric chat_id from the list)
+
+When the owner asks to unpause ALL chats:
+- Persian: "همه رو آزاد کن"، "همه پازها رو لغو کن"، "همه رو resume کن"
+- English: "unpause all", "resume all"
+→ Output tag: [UNPAUSE_ALL]
+
+When the owner asks WHO is paused:
+- Persian: "کی pause هست؟"، "چه کسی رو pause کردم؟"
+- English: "who is paused?", "list paused chats"
+→ Just list them in your reply naturally. NO tags.
+
+When the owner asks to INCREASE/CHANGE pause duration for a specific chat, that's not supported — just say so.
+
+⚠️ CRITICAL: After outputting [UNPAUSE: ...] or [UNPAUSE_ALL], you can add a short confirmation message BEFORE or AFTER the tag. But the tag MUST be on its own line.
+
+Example:
+Owner: پاز علی رو لغو کن
+You: باشه، دارم آزادش می‌کنم ✅
+[UNPAUSE: 12345]
+
+=== MEMORY SAVE RULES ===
 DO save ONLY if the owner says "یادت باشه..." / "به خاطر بسپار..." / "remember..." / "فراموش کن..."
 DO NOT save for normal chat, questions, jokes.
-When in doubt, DO NOT save.
 
 {vblock}
 
@@ -591,12 +655,14 @@ async def api_paused_list(request):
     for chat_id in list(owner_last_seen.keys()):
         remaining = pause_remaining(chat_id)
         if remaining > 0:
-            name = None
-            try:
-                entity = await client.get_entity(chat_id)
-                name = getattr(entity, "first_name", None) or getattr(entity, "title", None)
-            except:
-                pass
+            name = chat_names_cache.get(chat_id)
+            if not name:
+                try:
+                    entity = await client.get_entity(chat_id)
+                    name = getattr(entity, "first_name", None) or getattr(entity, "title", None)
+                    chat_names_cache[chat_id] = name
+                except:
+                    pass
             paused.append({
                 "chat_id": chat_id,
                 "name": name,
@@ -614,6 +680,11 @@ async def api_pause(request):
     except:
         return json_response({"error": "chat_id required"}, 400)
     owner_last_seen[chat_id] = time.time()
+    if chat_id not in chat_names_cache:
+        try:
+            asyncio.create_task(cache_chat_name(chat_id))
+        except:
+            pass
     log(f"🛑 Paused {chat_id}")
     return json_response({"ok": True, "chat_id": chat_id, "remaining": runtime_settings["pause_duration"]})
 
@@ -753,6 +824,66 @@ async def on_owner_message(event):
         await event.reply("متأسفم، الان نتونستم جواب بدم. دوباره امتحان کن 🙏")
         return
 
+    # ==== پردازش UNPAUSE_ALL ====
+    if "[UNPAUSE_ALL]" in raw:
+        count = len(owner_last_seen)
+        owner_last_seen.clear()
+        log(f"▶️ AI unpaused all ({count} chats)")
+        reply = raw.replace("[UNPAUSE_ALL]", "").strip()
+        reply = (
+            reply.replace("[IMPORTANT]", "")
+            .replace("[NORMAL]", "")
+            .replace("[ENABLE_VOICE]", "")
+            .replace("[DISABLE_VOICE]", "")
+            .strip()
+        )
+        if not reply:
+            reply = f"✅ همه {count} چت آزاد شدن"
+        await event.reply(reply)
+        return
+
+    # ==== پردازش UNPAUSE ====
+    if "[UNPAUSE:" in raw:
+        try:
+            inner = raw.split("[UNPAUSE:", 1)[1].split("]", 1)[0].strip()
+            target_chat_id = None
+            
+            # اول به‌عنوان عدد امتحان کن
+            try:
+                target_chat_id = int(inner)
+            except:
+                # اگه عدد نبود، بر اساس اسم بگرد
+                inner_lower = inner.lower()
+                for cid, name in chat_names_cache.items():
+                    if cid not in owner_last_seen:
+                        continue
+                    if inner_lower in name.lower() or name.lower() in inner_lower:
+                        target_chat_id = cid
+                        break
+            
+            if target_chat_id and target_chat_id in owner_last_seen:
+                del owner_last_seen[target_chat_id]
+                name = chat_names_cache.get(target_chat_id, str(target_chat_id))
+                log(f"▶️ AI unpaused {target_chat_id} ({name})")
+                
+                reply = raw.replace(f"[UNPAUSE: {inner}]", "").replace(f"[UNPAUSE:{inner}]", "")
+                reply = (
+                    reply.replace("[IMPORTANT]", "")
+                    .replace("[NORMAL]", "")
+                    .replace("[ENABLE_VOICE]", "")
+                    .replace("[DISABLE_VOICE]", "")
+                    .strip()
+                )
+                if not reply:
+                    reply = f"✅ چت «{name}» آزاد شد"
+                await event.reply(reply)
+            else:
+                await event.reply(f"❓ نتونستم چت «{inner}» رو توی لیست pause پیدا کنم")
+            return
+        except Exception as e:
+            log(f"UNPAUSE parse error: {e}")
+
+    # ==== پردازش تگ‌های حافظه ====
     enable_voice = "[ENABLE_VOICE]" in raw
     disable_voice = "[DISABLE_VOICE]" in raw
 
@@ -934,6 +1065,7 @@ async def main():
     log(f"🔊 Voice output: {'enabled' if runtime_settings['voice_output'] else 'disabled'}")
     log(f"⏸️ Pause: {'enabled' if runtime_settings['pause_enabled'] else 'disabled'} ({runtime_settings['pause_duration']//60} min)")
     log(f"🔐 API Key: {'set' if API_KEY != 'changeme' else 'NOT SET (danger!)'}")
+    log("🎯 AI unpause command: ENABLED")
 
     await client.run_until_disconnected()
 
