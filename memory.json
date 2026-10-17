@@ -15,51 +15,120 @@
   },
   "custom_rules": [],
   "personality_override": "",
-  "last_senders": [
+  "dm_senders": [
     {
       "chat_id": 6657424137,
       "name": "Maman♥️",
-      "timestamp": 1792249930.0
+      "timestamp": 1792249930.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 7972829021,
       "name": "Soheyl class",
-      "timestamp": 1792228033.0
+      "timestamp": 1792228033.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 8584079030,
       "name": "امیر",
-      "timestamp": 1792227344.0
+      "timestamp": 1792227344.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 777000,
       "name": "Telegram",
-      "timestamp": 1792181124.0
+      "timestamp": 1792181124.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 7002125861,
       "name": "Baba♥️",
-      "timestamp": 1792176673.0
+      "timestamp": 1792176673.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 7370787598,
       "name": "Dr.Batman",
-      "timestamp": 1792081712.0
+      "timestamp": 1792081712.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 8238241181,
       "name": "Faraji",
-      "timestamp": 1791724269.0
+      "timestamp": 1791724269.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 566097766,
       "name": "Yons m",
-      "timestamp": 1791287045.0
+      "timestamp": 1791287045.0,
+      "is_bot": false,
+      "is_group": false
     },
     {
       "chat_id": 6578367171,
       "name": "Aizen.D.Luffy",
-      "timestamp": 1790969379.0
+      "timestamp": 1790969379.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 6759838545,
+      "name": "Bardia",
+      "timestamp": 1789989849.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 8167888827,
+      "name": "Support",
+      "timestamp": 1788439869.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 6446536474,
+      "name": "Parham Famil",
+      "timestamp": 1784650859.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7625892004,
+      "name": "𝗦𝘂𝗽𝗽𝗼𝗿𝘁 |JKVPN",
+      "timestamp": 1784322067.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 243495421,
+      "name": "Morteza Dost Sajad",
+      "timestamp": 1784127075.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 93413404,
+      "name": "Dayy",
+      "timestamp": 1783548578.0,
+      "is_bot": false,
+      "is_group": false
+    }
+  ],
+  "all_senders": [
+    {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792250955.4785442,
+      "is_bot": false,
+      "is_group": true
     }
   ]
 }
