@@ -57,6 +57,9 @@ started_at = time.time()
 dm_dirty = False
 all_dirty = False
 
+# Alert marker — used to skip alerts in on_owner_message
+ALERT_PREFIX = "⚠️ پیام مهم"
+
 def log(message):
     ts = time.strftime("%H:%M:%S")
     recent_logs.append({"time": ts, "text": message})
@@ -180,7 +183,6 @@ def track_sender(chat_id, name, is_bot=False, is_group=False):
         dm_dirty = True
 
 async def forward_last_incoming(chat_id):
-    """فوروارد آخرین پیام دریافتی"""
     try:
         messages = await client.get_messages(chat_id, limit=20)
         for m in messages:
@@ -193,7 +195,6 @@ async def forward_last_incoming(chat_id):
         return False
 
 async def forward_last_outgoing(chat_id):
-    """فوروارد آخرین پیام ارسالی (پاسخ ربات)"""
     try:
         messages = await client.get_messages(chat_id, limit=20)
         for m in messages:
@@ -482,61 +483,51 @@ def build_prompt(user_id, new_message, is_owner=False):
 [FORWARD: target | n] · [FORWARD_LAST | n] · [CONTEXT: target]
 [POPULATE_DM_SENDERS] · [WHO_LAST_DM]
 [POPULATE_ALL_SENDERS] · [WHO_LAST_ALL]
-[SHOW_LAST_INCOMING: target] — فوروارد آخرین پیام کاربر
-[SHOW_LAST_OUTGOING: target] — فوروارد آخرین پاسخ ربات
+[SHOW_LAST_INCOMING: target] — forward آخرین پیام کاربر
+[SHOW_LAST_OUTGOING: target] — forward آخرین پاسخ ربات
 [SHOW_MSG: target | n]
 [GLOBAL_MUTE: min] · [GLOBAL_UNMUTE]
 [RULE_ADD: t] · [RULE_REMOVE: i] · [RULE_LIST] · [RULE_CLEAR]
 [PERSONALITY_SET: t] · [PERSONALITY_CLEAR] · [PERSONALITY_SHOW]
 
-=== ⚠️⚠️⚠️ CRITICAL — INCOMING vs OUTGOING ⚠️⚠️⚠️ ===
-
-This is the MOST IMPORTANT distinction. Read carefully:
+=== ⚠️ CRITICAL — INCOMING vs OUTGOING ===
 
 📥 **INCOMING** = پیام کاربر (طرف مقابل)
-   Trigger words:
-   - "چی **نوشته**؟"  (has "ه" at end — third person)
-   - "چی **گفت**؟"
-   - "**پیامش** چی بود؟"
-   - "**پیام کاربر** چی بود؟"
-   - "**اون** چی گفت؟"
-   - "**چه پیامی** داد؟"
-   → Use [SHOW_LAST_INCOMING: target]
+Trigger words:
+- "چی **نوشته**" (has ه at end — third person)
+- "چی **گفت**"
+- "**پیامش** چی بود"
+- "**پیام کاربر** چی بود"
+- "**چه پیامی** داد"
+→ Use [SHOW_LAST_INCOMING: target]
 
 📤 **OUTGOING** = پاسخ ربات (خودت)
-   Trigger words:
-   - "**تو** چی **نوشتی**؟"  (has "ی" at end — second person "you")
-   - "**تو** چی **گفتی**؟"
-   - "**جواب تو** چی بود؟"
-   - "**پاسخ تو** چی بود؟"
-   - "**تو** چی **جواب** دادی؟"
-   - "**دستیار** چی گفت؟"
-   → Use [SHOW_LAST_OUTGOING: target]
+Trigger words:
+- "**تو** چی **نوشتی**" (has ی at end — second person)
+- "**تو** چی **گفتی**"
+- "**جواب تو** چی بود"
+- "**پاسخ تو** چی بود"
+- "**دستیار** چی گفت"
+→ Use [SHOW_LAST_OUTGOING: target]
 
-🚨 Key insight:
-   - "نوشت**ه**" / "گف**ت**" / "پیام**ش**" = THEM = INCOMING
-   - "نوشت**ی**" / "گف**ت**ی" / "جواب **تو**" = YOU = OUTGOING
-   - One letter difference!
+🚨 One-letter difference:
+- "نوشتـه" / "گفـت" = THEM = INCOMING
+- "نوشتـی" / "گفتـی" = YOU = OUTGOING
 
-📋 Examples:
-   User: "چی نوشته؟" → [SHOW_LAST_INCOMING: علی]
-   User: "چی نوشتی؟" → [SHOW_LAST_OUTGOING: علی]
-   User: "چی نوشته چی نوشتی؟" → BOTH tags on separate lines:
-      [SHOW_LAST_INCOMING: علی]
-      [SHOW_LAST_OUTGOING: علی]
-   User: "تو چی جواب دادی؟" → [SHOW_LAST_OUTGOING: علی]
-   User: "پیامش چی بود؟" → [SHOW_LAST_INCOMING: علی]
+Example:
+- "چی نوشته؟" → [SHOW_LAST_INCOMING: علی]
+- "چی نوشتی؟" → [SHOW_LAST_OUTGOING: علی]
+- "چی نوشته چی نوشتی؟" → BOTH tags on separate lines
 
-⚠️ These tags will FORWARD the actual message (not text). Don't say "متنش اینه".
+⚠️ These tags FORWARD the actual message. Don't say "متنش اینه".
 
-=== OTHER CRITICAL RULES ===
+=== OTHER RULES ===
 
 **DM vs ALL:**
 - "آخرین نفری که **بهت** پیام داد" → DM (dm_senders)
 - "**کلی**" / "همه چت‌هام" → ALL (all_senders)
 
-**"بیشتر" / "چند تا":**
-→ [SHOW_MSG: target | 5]
+**"بیشتر":** [SHOW_MSG: target | 5]
 
 **NEVER promise without action:**
 - ❌ "الان می‌فرستم" (بدون tag)
@@ -567,10 +558,36 @@ Persian, casual, warm, 1-3 sentences.
 {build_personality_section()}
 
 === Rules ===
-- Same language
-- "{OWNER_NAME}'s AI assistant"
+- Same language as user
+- Introduce as "{OWNER_NAME}'s AI assistant"
 - Never pretend to be them
-- End with [IMPORTANT] or [NORMAL]
+- Keep short (1-3 sentences)
+
+=== ⚠️⚠️⚠️ MANDATORY — TAG AT END OF EVERY REPLY ⚠️⚠️⚠️ ===
+
+EVERY SINGLE REPLY must end with EXACTLY ONE tag on its own line.
+This is NOT optional. The system depends on it.
+NEVER skip this tag.
+
+[IMPORTANT] — use when ANY of:
+- User is stressed, sad, angry, emotional
+- User asks to meet/call/see {OWNER_NAME}
+- Contains "فوری" / "اورژانس" / "مهم" / "ضروری" / "زود"
+- Business, money, family, health, school issues
+- User wants {OWNER_NAME} specifically
+- Waiting for response / urgent
+- Negative feedback or complaint
+
+[NORMAL] — everything else:
+- Casual chat, greetings, jokes
+- General knowledge questions
+- Information that doesn't need {OWNER_NAME}
+
+Examples:
+- "سلام، خوبی؟" → "سلام! 😊 خوبم..." + [NORMAL]
+- "پوریا کجاست؟" → "الان نیست..." + [IMPORTANT]
+- "فوری زنگ بزن" → "باشه بهش می‌گم..." + [IMPORTANT]
+- "پایتخت فرانسه؟" → "پاریس 🇫🇷" + [NORMAL]
 
 === TEACHING ===
 Only {OWNER_NAME} can teach. Voice request ≠ teaching.
@@ -618,16 +635,20 @@ async def ask_gemini(prompt, chat_id=None, with_progress=False, progress_initial
             await progress.stop()
 
 async def send_alert(text):
-    if not NTFY_TOPIC: return
+    if not NTFY_TOPIC:
+        log("⚠️ send_alert: NTFY_TOPIC not set — SKIPPING!")
+        return
     try:
         loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, lambda: requests.post(
+        r = await loop.run_in_executor(None, lambda: requests.post(
             f"https://ntfy.sh/{NTFY_TOPIC}",
             data=text.encode('utf-8'),
             headers={"Title": "Important", "Priority": "urgent", "Tags": "rotating_light,warning"},
             timeout=10
         ))
-    except: pass
+        log(f"🔔 ntfy sent (status: {r.status_code})")
+    except Exception as e:
+        log(f"⚠️ ntfy error: {str(e)[:100]}")
 
 async def transcribe_voice(voice_path):
     started = time.time()
@@ -827,6 +848,11 @@ async def on_owner_message(event):
 
     text = event.message.text or ""
 
+    # ==== CRITICAL FIX: Skip alert messages (don't re-process them) ====
+    if text and ALERT_PREFIX in text:
+        log(f"⏭️ Skipping alert message (not processing with AI)")
+        return
+
     if not text.strip() and event.message.voice:
         if not runtime_settings.get("voice_input", True):
             await event.reply("🚫 ویس غیرفعال"); return
@@ -857,7 +883,6 @@ async def on_owner_message(event):
         if cid is None:
             await event.reply(f"❓ «{target}» پیدا نشد"); return
         
-        # Force refresh name if it's numeric
         name = await cache_chat_name(cid, force=True)
         
         progress = ProgressReporter(event.chat_id, f"⏳ دارم پیام‌های {name} رو فوروارد می‌کنم...", interval=10)
@@ -1287,15 +1312,49 @@ async def on_incoming(event):
     raw, _ = await ask_gemini(prompt, chat_id=event.chat_id)
     if raw is None: return
 
+    # ==== Detect importance with multiple fallbacks ====
     important = "[IMPORTANT]" in raw
     enable_voice = "[ENABLE_VOICE]" in raw
     disable_voice = "[DISABLE_VOICE]" in raw
+
+    # Fallback: if no tag at all but has urgent keywords, treat as important
+    if not important and "[NORMAL]" not in raw:
+        urgent_kw = ["فوری", "اورژانس", "زنگ بزن", "مهم", "ضروری", "خودت بیا", "خودت جواب", "تماس بگیر"]
+        if any(kw in text for kw in urgent_kw):
+            important = True
+            log(f"⚠️ No tag but urgent keyword → treating as IMPORTANT")
 
     if enable_voice: set_voice_pref(user_key, True)
     elif disable_voice: set_voice_pref(user_key, False)
 
     reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
-    if not reply: return
+
+    # ==== CRITICAL FIX: Send alert FIRST, before any early returns ====
+    if important:
+        try:
+            sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or str(sender.id)
+            uname = f"@{sender.username}" if sender.username else "—"
+            alert_text = (f"{ALERT_PREFIX}\n\n"
+                          f"👤 {sender_name} ({uname})\n"
+                          f"🆔 `{sender.id}`\n\n"
+                          f"📩 {text}\n\n"
+                          f"🤖 {reply or '(بدون جواب)'}")
+            log(f"🚨 IMPORTANT from {sender.id} — sending silent alert...")
+            await client.send_message("me", alert_text, silent=True)
+            log(f"📩 Silent alert sent to Saved Messages")
+            
+            # Schedule ntfy alert AFTER delay (don't block main flow)
+            async def delayed_ntfy():
+                await asyncio.sleep(runtime_settings["alert_delay"])
+                await send_alert(alert_text)
+            asyncio.create_task(delayed_ntfy())
+            log(f"⏰ ntfy alert scheduled in {runtime_settings['alert_delay']}s")
+        except Exception as e:
+            log(f"⚠️ Alert error: {str(e)[:150]}")
+
+    # ==== Now send reply (can be empty after alert) ====
+    if not reply:
+        return
 
     histories.setdefault(user_key, []).append(f"You: {reply}")
     bot_last_replies[event.chat_id] = {"text": reply, "ts": time.time()}
@@ -1304,15 +1363,6 @@ async def on_incoming(event):
 
     if get_voice_pref(user_key) is True and not disable_voice:
         await send_voice_reply(event.chat_id, event.message.id, reply)
-
-    if important:
-        sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or str(sender.id)
-        uname = f"@{sender.username}" if sender.username else "—"
-        alert = (f"⚠️ پیام مهم\n\n👤 {sender_name} ({uname})\n🆔 `{sender.id}`\n\n"
-                 f"📩 {text}\n\n🤖 {reply}")
-        await client.send_message("me", alert, silent=True)
-        await asyncio.sleep(runtime_settings["alert_delay"])
-        await send_alert(alert)
 
 
 async def start_api():
@@ -1331,6 +1381,9 @@ async def main():
     await start_api()
     log("🚀 Running...")
     log(f"📥 DM: {len(dm_senders)} | ALL: {len(all_senders)}")
+    log(f"🚨 Alert system: prefix='{ALERT_PREFIX}', delay={runtime_settings['alert_delay']}s")
+    if not NTFY_TOPIC:
+        log("⚠️⚠️⚠️ NTFY_TOPIC NOT SET — alerts won't be sent to phone!")
     await client.run_until_disconnected()
 
 
