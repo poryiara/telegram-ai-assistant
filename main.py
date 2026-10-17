@@ -47,11 +47,12 @@ runtime_settings = {
 }
 
 # ============ State ============
-owner_last_seen = {}          # chat_id → timestamp آخرین پیام مالک
-chat_names_cache = {}         # chat_id → name
-custom_pause_durations = {}   # chat_id → seconds (override)
-global_mute_until = 0         # timestamp تا کی همه چیز ساکت
-last_bot_send_time = 0        # برای جلوگیری از loop
+owner_last_seen = {}
+chat_names_cache = {}
+custom_pause_durations = {}
+global_mute_until = 0
+last_bot_send_time = 0
+last_sender_cache = []  # لیست آخرین فرستنده‌ها (chat_id + name + timestamp)
 
 # ============ لاگ ============
 recent_logs = deque(maxlen=100)
@@ -143,23 +144,45 @@ def pause_remaining(chat_id):
 def is_globally_muted():
     return time.time() < global_mute_until
 
+def track_sender(chat_id, name):
+    """ذخیره آخرین فرستنده‌ها"""
+    global last_sender_cache
+    # حذف قبلی از لیست
+    last_sender_cache = [x for x in last_sender_cache if x["chat_id"] != chat_id]
+    # اضافه به اول لیست
+    last_sender_cache.insert(0, {
+        "chat_id": chat_id,
+        "name": name,
+        "timestamp": time.time(),
+    })
+    # حداکثر ۲۰ تا نگه دار
+    last_sender_cache = last_sender_cache[:20]
+
 async def resolve_chat_id(target_str):
-    """تبدیل اسم یا ID به chat_id"""
-    target_str = target_str.strip()
+    target_str = str(target_str).strip()
     try:
         return int(target_str)
     except:
         pass
     
+    # اگه "last" یا مشابه باشه، آخرین فرستنده
+    if target_str.lower() in ["last", "اخرین", "آخرین", "اخری", "آخری"]:
+        if last_sender_cache:
+            return last_sender_cache[0]["chat_id"]
+        return None
+    
     target_lower = target_str.lower()
-    # اول از کش
     for cid, name in chat_names_cache.items():
         if name and (target_lower in name.lower() or name.lower() in target_lower):
             return cid
     
-    # سرچ توی چت‌های اخیر
+    # سرچ توی last_sender_cache
+    for item in last_sender_cache:
+        if target_lower in item["name"].lower() or item["name"].lower() in target_lower:
+            return item["chat_id"]
+    
+    # سرچ توی دیالوگ‌ها
     try:
-        count = 0
         async for dialog in client.iter_dialogs(limit=40):
             if not dialog.is_user:
                 continue
@@ -168,7 +191,6 @@ async def resolve_chat_id(target_str):
             if entity_name and (target_lower in entity_name.lower() or entity_name.lower() in target_lower):
                 chat_names_cache[dialog.id] = entity_name
                 return dialog.id
-            count += 1
     except Exception as e:
         log(f"⚠️ Search error: {str(e)[:80]}")
     return None
@@ -186,33 +208,61 @@ def build_paused_section():
             name = chat_names_cache.get(chat_id, "نامشخص")
             duration_min = get_pause_duration(chat_id) // 60
             custom = " (custom)" if chat_id in custom_pause_durations else ""
-            lines.append(f"- نام: {name} | chat_id: {chat_id} | مدت کل: {duration_min}دقیقه{custom} | باقی‌مونده: {remaining//60}د {remaining%60}ث")
+            lines.append(f"- نام: {name} | chat_id: {chat_id} | مدت: {duration_min}د{custom} | باقی: {remaining//60}د {remaining%60}ث")
     
     if not found:
         return "=== PAUSED CHATS ===\nهیچ چتی pause نیست."
     
     return "\n".join(lines)
 
+def build_last_senders_section():
+    if not last_sender_cache:
+        return "=== RECENT SENDERS ===\nهیچ پیامی اخیراً نیومده."
+    
+    lines = ["=== RECENT SENDERS (last 10) ==="]
+    for i, item in enumerate(last_sender_cache[:10], 1):
+        ago = int(time.time() - item["timestamp"])
+        lines.append(f"{i}. نام: {item['name']} | chat_id: {item['chat_id']} | {ago//60}د {ago%60}ث پیش")
+    return "\n".join(lines)
+
+def build_custom_rules_section():
+    rules = memory.get("custom_rules", [])
+    if not rules:
+        return ""
+    
+    lines = ["=== CUSTOM RULES (set by owner — OBEY THEM) ==="]
+    for rule in rules:
+        lines.append(f"- {rule}")
+    return "\n".join(lines)
+
+def build_personality_section():
+    personality = memory.get("personality_override", "")
+    if not personality:
+        return ""
+    return f"=== PERSONALITY OVERRIDE (set by owner) ===\n{personality}"
+
 def build_global_mute_section():
     if is_globally_muted():
         remaining = int(global_mute_until - time.time())
-        return f"=== GLOBAL MUTE ===\n⚠️ ربات الان در حالت سکوت سراسری است. {remaining//60} دقیقه و {remaining%60} ثانیه باقی مانده."
+        return f"=== GLOBAL MUTE ===\n⚠️ سکوت سراسری فعال — {remaining//60}د {remaining%60}ث باقی."
     return ""
 
-# ============ Forward / Context helpers ============
+# ============ Forward / Context ============
 async def forward_last_messages(chat_id, count=1):
-    """فوروارد آخرین N پیام به Saved Messages"""
     try:
         messages = await client.get_messages(chat_id, limit=count)
         if not messages:
             return 0, "هیچ پیامی پیدا نشد"
-        await client.forward_messages("me", messages)
-        return len(messages), None
+        # فقط پیام‌هایی که از کاربر اومدن (نه خودت)
+        user_msgs = [m for m in messages if not m.out]
+        if not user_msgs:
+            user_msgs = messages
+        await client.forward_messages("me", user_msgs)
+        return len(user_msgs), None
     except Exception as e:
         return 0, str(e)
 
 async def show_context(chat_id, count=5):
-    """نمایش متن آخرین N پیام"""
     try:
         messages = await client.get_messages(chat_id, limit=count)
         if not messages:
@@ -236,7 +286,13 @@ def github_headers():
     }
 
 def fetch_memory():
-    empty = {"learned_facts": {}, "owner_notes": [], "voice_preferences": {}}
+    empty = {
+        "learned_facts": {},
+        "owner_notes": [],
+        "voice_preferences": {},
+        "custom_rules": [],
+        "personality_override": "",
+    }
     if not GITHUB_TOKEN:
         log("⚠️ No GITHUB_TOKEN")
         return empty, None
@@ -250,6 +306,8 @@ def fetch_memory():
             mem.setdefault("voice_preferences", {})
             mem.setdefault("learned_facts", {})
             mem.setdefault("owner_notes", [])
+            mem.setdefault("custom_rules", [])
+            mem.setdefault("personality_override", "")
             mem.pop("conversations", None)
             return mem, data["sha"]
         elif r.status_code == 404:
@@ -269,6 +327,8 @@ def push_memory(mem):
         "learned_facts": mem.get("learned_facts", {}),
         "owner_notes": mem.get("owner_notes", []),
         "voice_preferences": mem.get("voice_preferences", {}),
+        "custom_rules": mem.get("custom_rules", []),
+        "personality_override": mem.get("personality_override", ""),
     }
     content = base64.b64encode(json.dumps(to_save, ensure_ascii=False, indent=2).encode("utf-8")).decode("utf-8")
     payload = {"message": "Update AI memory", "content": content, "branch": GITHUB_BRANCH}
@@ -349,7 +409,11 @@ def build_prompt(user_id, new_message, is_owner=False):
         vpref = get_voice_pref("owner")
         vblock = voice_status_block(vpref, is_owner=True)
         paused_section = build_paused_section()
+        senders_section = build_last_senders_section()
         mute_section = build_global_mute_section()
+        rules_section = build_custom_rules_section()
+        personality_section = build_personality_section()
+        
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You are talking to {OWNER_NAME} THEMSELVES in their Saved Messages.
 This is your boss. Be warm, friendly, casual — like a close friend.
@@ -359,7 +423,13 @@ This is your boss. Be warm, friendly, casual — like a close friend.
 
 {paused_section}
 
+{senders_section}
+
 {mute_section}
+
+{rules_section}
+
+{personality_section}
 
 === SPECIAL POWERS (OWNER ONLY) ===
 
@@ -370,64 +440,77 @@ This is your boss. Be warm, friendly, casual — like a close friend.
 [SHOW_MEMORY]         — show everything
 
 **Pause management:**
-[PAUSE: target | minutes]    — pause a chat for X minutes (default = global pause_duration)
-[PAUSE_FOREVER: target]      — pause a chat indefinitely (until manual unpause)
-[UNPAUSE: target]            — unpause a specific chat
+[PAUSE: target | minutes]    — pause a chat for X minutes
+[PAUSE_FOREVER: target]      — pause indefinitely
+[UNPAUSE: target]            — unpause specific chat
 [UNPAUSE_ALL]                — unpause everything
 
 **Message retrieval:**
-[FORWARD: target | count]    — forward last N messages from a chat to Saved Messages
-[CONTEXT: target]            — show last 5 messages from a chat as text (without forwarding)
+[FORWARD: target | count]    — forward last N messages to Saved Messages
+[FORWARD_LAST | count]       — forward last N messages from the LAST person who messaged you
+[CONTEXT: target]            — show last 5 messages as text
 
-**Global mute (silence everything):**
-[GLOBAL_MUTE: minutes]       — mute ALL bot responses for X minutes
-[GLOBAL_UNMUTE]              — unmute immediately
+**Last senders:**
+[WHO_LAST]                   — explain who messaged you last (use RECENT SENDERS section)
+[LIST_SENDERS]               — list all recent senders
 
-⚠️ TARGET: can be a numeric chat_id OR a name (Persian or English). System resolves names.
-⚠️ After outputting a tag, you can add a short confirmation text BEFORE or AFTER. The tag MUST be on its own line.
+**Global mute:**
+[GLOBAL_MUTE: minutes]       — mute ALL bot responses
+[GLOBAL_UNMUTE]              — unmute
+
+**CUSTOM RULES (NEW! — Very important):**
+[RULE_ADD: text]             — add a persistent rule for ALL responses
+[RULE_REMOVE: index]         — remove rule by number (1-based)
+[RULE_LIST]                  — list all custom rules
+[RULE_CLEAR]                 — clear all rules
+
+**Personality:**
+[PERSONALITY_SET: text]      — override your personality/style (e.g. "be more formal")
+[PERSONALITY_CLEAR]          — remove personality override
+[PERSONALITY_SHOW]           — show current override
+
+⚠️ TARGET: numeric chat_id OR name OR "last"/"آخرین"/"آخری" (resolves to last sender)
+⚠️ Tags must be on their own line.
 
 === EXAMPLES ===
 
+Owner: آخرین نفر کی پیام داد؟
+You: [looking at RECENT SENDERS list]
+بذار ببینم... ✨ علی بود، حدود ۵ دقیقه پیش.
+[WHO_LAST]
+
+Owner: آخرین پیامی که برام اومده رو فوروارد کن
+You: باشه، از آخرین نفر می‌فرستم 📨
+[FORWARD_LAST | 1]
+
+Owner: 5 پیام آخر علی رو فوروارد کن
+You: [FORWARD: علی | 5]
+
 Owner: علی رو 2 ساعت pause کن
-You: باشه، علی رو ۲ ساعت pause کردم ✋
-[PAUSE: علی | 120]
-
-Owner: این چت رو دائمی pause کن
-You: حله، تا وقتی خودت unpause نکنی ساکت می‌مونه 🛑
-[PAUSE_FOREVER: 123456789]
-
-Owner: پاز علی رو لغو کن
-You: باشه آزادش کردم ✅
-[UNPAUSE: علی]
-
-Owner: همه رو آزاد کن
-You: همه چت‌ها آزاد شدن ✅
-[UNPAUSE_ALL]
-
-Owner: پیام‌های آخر علی رو برام فوروارد کن
-You: باشه، ۵ پیام آخرش رو می‌فرستم 📨
-[FORWARD: علی | 5]
-
-Owner: علی آخرین بار چی گفت؟
-You: بذار ببینم...
-[CONTEXT: علی]
-
-Owner: پیام آیدی 123456789 رو برام فوروارد کن
-You: باشه ✅
-[FORWARD: 123456789 | 1]
-
-Owner: 30 دقیقه همه رو ساکت کن (به کسی جواب نده)
-You: باشه ۳۰ دقیقه ساکت می‌شم 🤐
-[GLOBAL_MUTE: 30]
-
-Owner: دیگه ساکت نباش
-You: باشه دوباره فعال شدم ✨
-[GLOBAL_UNMUTE]
+You: [PAUSE: علی | 120]
 
 Owner: کی pause هست؟
-You: [list naturally from PAUSED CHATS section, NO tags]
+You: [list naturally from PAUSED CHATS]
 
-Owner: یادت باشه اسم بهترین دوستم علیه
+Owner: از این به بعد اگه کسی ساعت پرسید، بگو دسترسی ندارم
+You: حله، به قوانینم اضافه شد ✅
+[RULE_ADD: اگه کسی پرسید ساعت چنده، بگو دسترسی ندارم]
+
+Owner: از این به بعد رسمی‌تر حرف بزن
+You: باشه، از الان رسمی می‌شه ✨
+[PERSONALITY_SET: با همه رسمی و محترمانه حرف بزن، از ایموجی کم استفاده کن]
+
+Owner: قوانینت رو نشونم بده
+You: [RULE_LIST]
+
+Owner: همه قوانین رو پاک کن
+You: حله، همه پاک شدن 🧹
+[RULE_CLEAR]
+
+Owner: 30 دقیقه همه رو ساکت کن
+You: [GLOBAL_MUTE: 30]
+
+Owner: یادت باشه اسم دوستم علیه
 You: [LEARN: best_friend | Ali]
 
 === MEMORY RULES ===
@@ -443,6 +526,7 @@ You:"""
     else:
         vpref = get_voice_pref(user_id)
         vblock = voice_status_block(vpref, is_owner=False)
+        personality_section = build_personality_section()
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You answer Telegram messages on their behalf while they are away.
 You're warm, funny, and real — like a close friend. Use emojis naturally.
@@ -451,6 +535,8 @@ Sound native in Persian — casual, not bookish.
 
 === About your boss ===
 {build_owner_info()}
+
+{personality_section}
 
 === Rules ===
 - Always respond in the same language as the incoming message (default: Persian).
@@ -693,10 +779,7 @@ async def send_voice_reply(chat_id, reply_to_id, text):
 client = TelegramClient(StringSession(SESSION_STRING), API_ID, API_HASH)
 
 
-# ============================================================
-#                       REST API
-# ============================================================
-
+# ============ REST API ============
 CORS_HEADERS = {
     "Access-Control-Allow-Origin": "*",
     "Access-Control-Allow-Headers": "X-API-Key, Content-Type",
@@ -733,6 +816,8 @@ async def api_status(request):
             "voice_prefs_count": len(memory.get("voice_preferences", {})),
             "paused_chats_count": sum(1 for cid in owner_last_seen if is_owner_paused(cid)),
             "globally_muted": is_globally_muted(),
+            "custom_rules_count": len(memory.get("custom_rules", [])),
+            "personality_override": memory.get("personality_override", ""),
             "settings": runtime_settings,
         })
     except Exception as e:
@@ -791,7 +876,7 @@ async def api_pause(request):
     try:
         data = await request.json()
         chat_id = int(data.get("chat_id"))
-        duration = data.get("duration")  # optional, seconds
+        duration = data.get("duration")
     except:
         return json_response({"error": "chat_id required"}, 400)
     owner_last_seen[chat_id] = time.time()
@@ -838,6 +923,8 @@ async def api_facts(request):
     return json_response({
         "facts": memory.get("learned_facts", {}),
         "notes": memory.get("owner_notes", []),
+        "rules": memory.get("custom_rules", []),
+        "personality": memory.get("personality_override", ""),
     })
 
 async def api_fact_add(request):
@@ -900,7 +987,6 @@ async def on_owner_activity(event):
         return
     if event.chat_id == me.id:
         return
-    # اگه forwarded پیام باشه، نادیده بگیر
     if getattr(event.message, 'forward', None):
         return
     mark_owner_active(event.chat_id)
@@ -924,11 +1010,9 @@ async def on_owner_message(event):
     if event.sender_id != me.id:
         return
 
-    # جلوگیری از loop
     if time.time() - last_bot_send_time < 1.5:
         return
 
-    # پیام‌های forward شده رو نادیده بگیر
     if getattr(event.message, 'forward', None):
         return
 
@@ -986,7 +1070,7 @@ async def on_owner_message(event):
             last_bot_send_time = time.time()
             await event.reply(reply)
         else:
-            await event.reply(f"❓ نتونستم چت «{target}» رو توی لیست pause پیدا کنم")
+            await event.reply(f"❓ نتونستم چت «{target}» رو پیدا کنم")
         return
 
     # ===== PAUSE_FOREVER =====
@@ -996,7 +1080,7 @@ async def on_owner_message(event):
         cid = await resolve_chat_id(target)
         if cid:
             owner_last_seen[cid] = time.time()
-            custom_pause_durations[cid] = 10 * 365 * 24 * 3600  # 10 سال
+            custom_pause_durations[cid] = 10 * 365 * 24 * 3600
             await cache_chat_name(cid)
             name = chat_names_cache.get(cid, str(cid))
             log(f"🛑 AI paused FOREVER: {cid} ({name})")
@@ -1010,7 +1094,7 @@ async def on_owner_message(event):
             await event.reply(f"❓ نتونستم «{target}» رو پیدا کنم")
         return
 
-    # ===== PAUSE with duration =====
+    # ===== PAUSE =====
     m = re.search(r"\[PAUSE:\s*([^|\]]+)(?:\|\s*(\d+)\s*)?\]", raw)
     if m:
         target = m.group(1).strip()
@@ -1032,12 +1116,36 @@ async def on_owner_message(event):
             await event.reply(f"❓ نتونستم «{target}» رو پیدا کنم")
         return
 
+    # ===== FORWARD_LAST =====
+    m = re.search(r"\[FORWARD_LAST(?:\s*\|\s*(\d+))?\]", raw)
+    if m:
+        count = int(m.group(1)) if m.group(1) else 1
+        count = min(count, 20)
+        if not last_sender_cache:
+            await event.reply("❓ هیچ پیامی اخیراً نیومده")
+            return
+        last = last_sender_cache[0]
+        cid = last["chat_id"]
+        name = last["name"]
+        forwarded, err = await forward_last_messages(cid, count)
+        if err:
+            await event.reply(f"❌ خطا: {err}")
+        else:
+            log(f"📨 Forwarded {forwarded} msgs from last sender ({name})")
+            reply = re.sub(r"\[FORWARD_LAST[^\]]*\]", "", raw)
+            reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+            if not reply:
+                reply = f"📨 {forwarded} پیام از «{name}» (آخرین نفر) فوروارد شد"
+            last_bot_send_time = time.time()
+            await event.reply(reply)
+        return
+
     # ===== FORWARD =====
     m = re.search(r"\[FORWARD:\s*([^|\]]+)(?:\|\s*(\d+)\s*)?\]", raw)
     if m:
         target = m.group(1).strip()
         count = int(m.group(2)) if m.group(2) else 1
-        count = min(count, 20)  # حداکثر ۲۰
+        count = min(count, 20)
         cid = await resolve_chat_id(target)
         if cid:
             forwarded, err = await forward_last_messages(cid, count)
@@ -1076,6 +1184,31 @@ async def on_owner_message(event):
             await event.reply(f"❓ نتونستم «{target}» رو پیدا کنم")
         return
 
+    # ===== WHO_LAST / LIST_SENDERS =====
+    if "[WHO_LAST]" in raw or "[LIST_SENDERS]" in raw:
+        if not last_sender_cache:
+            await event.reply("❓ هیچ پیامی اخیراً نیومده")
+            return
+        lines = []
+        if "[WHO_LAST]" in raw:
+            last = last_sender_cache[0]
+            ago = int(time.time() - last["timestamp"])
+            lines.append(f"آخرین نفر: **{last['name']}** (آیدی: `{last['chat_id']}`) — {ago//60}د {ago%60}ث پیش")
+        if "[LIST_SENDERS]" in raw:
+            lines.append("\n**آخرین فرستنده‌ها:**")
+            for i, item in enumerate(last_sender_cache[:10], 1):
+                ago = int(time.time() - item["timestamp"])
+                lines.append(f"{i}. {item['name']} (`{item['chat_id']}`) — {ago//60}د پیش")
+        
+        reply = re.sub(r"\[(WHO_LAST|LIST_SENDERS)\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        message = "\n".join(lines)
+        if reply:
+            message = reply + "\n\n" + message
+        last_bot_send_time = time.time()
+        await event.reply(message)
+        return
+
     # ===== GLOBAL_MUTE =====
     m = re.search(r"\[GLOBAL_MUTE:\s*(\d+)\]", raw)
     if m:
@@ -1101,6 +1234,111 @@ async def on_owner_message(event):
             reply = "🔊 سکوت برداشته شد" if was_muted else "🔊 از اول هم ساکت نبودم"
         last_bot_send_time = time.time()
         await event.reply(reply)
+        return
+
+    # ===== RULE_ADD =====
+    m = re.search(r"\[RULE_ADD:\s*([^\]]+)\]", raw)
+    if m:
+        rule_text = m.group(1).strip()
+        memory.setdefault("custom_rules", [])
+        if rule_text not in memory["custom_rules"]:
+            memory["custom_rules"].append(rule_text)
+            save_memory_async()
+            log(f"📏 Rule added: {rule_text[:60]}")
+        reply = re.sub(r"\[RULE_ADD:[^\]]+\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        if not reply:
+            reply = f"✅ قانون اضافه شد (#{len(memory['custom_rules'])})\n📏 {rule_text}"
+        last_bot_send_time = time.time()
+        await event.reply(reply)
+        return
+
+    # ===== RULE_REMOVE =====
+    m = re.search(r"\[RULE_REMOVE:\s*(\d+)\]", raw)
+    if m:
+        idx = int(m.group(1)) - 1
+        rules = memory.get("custom_rules", [])
+        if 0 <= idx < len(rules):
+            removed = rules.pop(idx)
+            save_memory_async()
+            log(f"🗑️ Rule removed: {removed[:60]}")
+            reply = re.sub(r"\[RULE_REMOVE:\d+\]", "", raw)
+            reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+            if not reply:
+                reply = f"🗑️ قانون حذف شد: {removed}"
+            last_bot_send_time = time.time()
+            await event.reply(reply)
+        else:
+            await event.reply(f"❓ قانون #{idx+1} وجود نداره")
+        return
+
+    # ===== RULE_LIST =====
+    if "[RULE_LIST]" in raw:
+        rules = memory.get("custom_rules", [])
+        if not rules:
+            await event.reply("📏 هیچ قانون سفارشی ندارم")
+            return
+        lines = ["📏 **قوانین سفارشی:**\n"]
+        for i, r in enumerate(rules, 1):
+            lines.append(f"{i}. {r}")
+        reply = re.sub(r"\[RULE_LIST\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        message = "\n".join(lines)
+        if reply:
+            message = reply + "\n\n" + message
+        last_bot_send_time = time.time()
+        await event.reply(message)
+        return
+
+    # ===== RULE_CLEAR =====
+    if "[RULE_CLEAR]" in raw:
+        count = len(memory.get("custom_rules", []))
+        memory["custom_rules"] = []
+        save_memory_async()
+        log(f"🧹 Cleared {count} rules")
+        reply = re.sub(r"\[RULE_CLEAR\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        if not reply:
+            reply = f"🧹 {count} قانون پاک شد"
+        last_bot_send_time = time.time()
+        await event.reply(reply)
+        return
+
+    # ===== PERSONALITY_SET =====
+    m = re.search(r"\[PERSONALITY_SET:\s*([^\]]+)\]", raw)
+    if m:
+        personality = m.group(1).strip()
+        memory["personality_override"] = personality
+        save_memory_async()
+        log(f"🎭 Personality set: {personality[:60]}")
+        reply = re.sub(r"\[PERSONALITY_SET:[^\]]+\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        if not reply:
+            reply = f"🎭 شخصیت تغییر کرد:\n{personality}"
+        last_bot_send_time = time.time()
+        await event.reply(reply)
+        return
+
+    # ===== PERSONALITY_CLEAR =====
+    if "[PERSONALITY_CLEAR]" in raw:
+        memory["personality_override"] = ""
+        save_memory_async()
+        log("🎭 Personality cleared")
+        reply = re.sub(r"\[PERSONALITY_CLEAR\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        if not reply:
+            reply = "🎭 شخصیت به حالت پیش‌فرض برگشت"
+        last_bot_send_time = time.time()
+        await event.reply(reply)
+        return
+
+    # ===== PERSONALITY_SHOW =====
+    if "[PERSONALITY_SHOW]" in raw:
+        p = memory.get("personality_override", "")
+        if not p:
+            await event.reply("🎭 هیچ override فعال نیست — پیش‌فرض")
+            return
+        await event.reply(f"🎭 **شخصیت فعلی:**\n{p}")
         return
 
     # ===== Memory tags =====
@@ -1198,6 +1436,12 @@ async def on_dm(event):
     if sender.bot or sender.id == OWNER_ID:
         return
 
+    # Track sender
+    sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or str(sender.id)
+    track_sender(sender.id, sender_name)
+    if sender.id not in chat_names_cache:
+        chat_names_cache[sender.id] = sender_name
+
     if is_globally_muted():
         remaining = int(global_mute_until - time.time())
         log(f"🔇 Global mute — skipping user {sender.id} ({remaining//60}m left)")
@@ -1258,7 +1502,6 @@ async def on_dm(event):
         await send_voice_reply(event.chat_id, event.message.id, reply)
 
     if important:
-        sender_name = sender.first_name or "Unknown"
         username = f"@{sender.username}" if sender.username else "—"
         alert = (
             f"⚠️ پیام مهم داری\n\n"
@@ -1290,11 +1533,13 @@ async def main():
     await start_api_server()
 
     log("🚀 Userbot is running...")
-    log(f"📚 {len(memory.get('learned_facts', {}))} facts")
-    log(f"🎤 Voice input: {'on' if runtime_settings['voice_input'] else 'off'} | output: {'on' if runtime_settings['voice_output'] else 'off'}")
-    log(f"⏸️ Pause: {'on' if runtime_settings['pause_enabled'] else 'off'} ({runtime_settings['pause_duration']//60}min default)")
+    log(f"📚 {len(memory.get('learned_facts', {}))} facts | 📏 {len(memory.get('custom_rules', []))} rules")
+    if memory.get("personality_override"):
+        log(f"🎭 Personality override: {memory['personality_override'][:60]}")
+    log(f"🎤 Voice: input={'on' if runtime_settings['voice_input'] else 'off'} output={'on' if runtime_settings['voice_output'] else 'off'}")
+    log(f"⏸️ Pause: {'on' if runtime_settings['pause_enabled'] else 'off'} ({runtime_settings['pause_duration']//60}min)")
     log(f"🔐 API Key: {'set' if API_KEY != 'changeme' else 'NOT SET'}")
-    log("🧠 AI commands: PAUSE, PAUSE_FOREVER, UNPAUSE, UNPAUSE_ALL, FORWARD, CONTEXT, GLOBAL_MUTE, GLOBAL_UNMUTE")
+    log("🧠 Commands: PAUSE, UNPAUSE, FORWARD, FORWARD_LAST, CONTEXT, WHO_LAST, LIST_SENDERS, GLOBAL_MUTE, RULE_ADD, PERSONALITY_SET")
 
     await client.run_until_disconnected()
 
