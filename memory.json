@@ -12,5 +12,54 @@
   "voice_preferences": {
     "6657424137": false,
     "owner": false
-  }
+  },
+  "custom_rules": [],
+  "personality_override": "",
+  "last_senders": [
+    {
+      "chat_id": 6657424137,
+      "name": "Maman♥️",
+      "timestamp": 1792249930.0
+    },
+    {
+      "chat_id": 7972829021,
+      "name": "Soheyl class",
+      "timestamp": 1792228033.0
+    },
+    {
+      "chat_id": 8584079030,
+      "name": "امیر",
+      "timestamp": 1792227344.0
+    },
+    {
+      "chat_id": 777000,
+      "name": "Telegram",
+      "timestamp": 1792181124.0
+    },
+    {
+      "chat_id": 7002125861,
+      "name": "Baba♥️",
+      "timestamp": 1792176673.0
+    },
+    {
+      "chat_id": 7370787598,
+      "name": "Dr.Batman",
+      "timestamp": 1792081712.0
+    },
+    {
+      "chat_id": 8238241181,
+      "name": "Faraji",
+      "timestamp": 1791724269.0
+    },
+    {
+      "chat_id": 566097766,
+      "name": "Yons m",
+      "timestamp": 1791287045.0
+    },
+    {
+      "chat_id": 6578367171,
+      "name": "Aizen.D.Luffy",
+      "timestamp": 1790969379.0
+    }
+  ]
 }
