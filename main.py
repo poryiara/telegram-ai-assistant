@@ -46,7 +46,14 @@ runtime_settings = {
     "max_retry_time": 300,
 }
 
-# ============ لاگ زنده ============
+# ============ State ============
+owner_last_seen = {}          # chat_id → timestamp آخرین پیام مالک
+chat_names_cache = {}         # chat_id → name
+custom_pause_durations = {}   # chat_id → seconds (override)
+global_mute_until = 0         # timestamp تا کی همه چیز ساکت
+last_bot_send_time = 0        # برای جلوگیری از loop
+
+# ============ لاگ ============
 recent_logs = deque(maxlen=100)
 started_at = time.time()
 
@@ -98,19 +105,18 @@ Notes:
   - If someone's reaching out about a project or tech-related, that's usually important.
 """
 
-# ============ Pause cache ============
-owner_last_seen = {}
-chat_names_cache = {}  # chat_id → name
-
+# ============ Pause helpers ============
 async def cache_chat_name(chat_id):
-    """گرفتن اسم چت و ذخیره توی کش"""
     try:
         entity = await client.get_entity(chat_id)
         name = getattr(entity, "first_name", None) or getattr(entity, "title", None) or str(chat_id)
         chat_names_cache[chat_id] = name
     except Exception as e:
         chat_names_cache[chat_id] = str(chat_id)
-        log(f"⚠️ Could not fetch name for {chat_id}: {e}")
+        log(f"⚠️ Could not fetch name for {chat_id}: {str(e)[:60]}")
+
+def get_pause_duration(chat_id):
+    return custom_pause_durations.get(chat_id, runtime_settings["pause_duration"])
 
 def mark_owner_active(chat_id):
     owner_last_seen[chat_id] = time.time()
@@ -126,30 +132,101 @@ def is_owner_paused(chat_id):
     last = owner_last_seen.get(chat_id, 0)
     if last == 0:
         return False
-    return (time.time() - last) < runtime_settings["pause_duration"]
+    return (time.time() - last) < get_pause_duration(chat_id)
 
 def pause_remaining(chat_id):
     last = owner_last_seen.get(chat_id, 0)
     if last == 0:
         return 0
-    return max(0, int(runtime_settings["pause_duration"] - (time.time() - last)))
+    return max(0, int(get_pause_duration(chat_id) - (time.time() - last)))
+
+def is_globally_muted():
+    return time.time() < global_mute_until
+
+async def resolve_chat_id(target_str):
+    """تبدیل اسم یا ID به chat_id"""
+    target_str = target_str.strip()
+    try:
+        return int(target_str)
+    except:
+        pass
+    
+    target_lower = target_str.lower()
+    # اول از کش
+    for cid, name in chat_names_cache.items():
+        if name and (target_lower in name.lower() or name.lower() in target_lower):
+            return cid
+    
+    # سرچ توی چت‌های اخیر
+    try:
+        count = 0
+        async for dialog in client.iter_dialogs(limit=40):
+            if not dialog.is_user:
+                continue
+            entity = dialog.entity
+            entity_name = getattr(entity, "first_name", "") or getattr(entity, "title", "") or ""
+            if entity_name and (target_lower in entity_name.lower() or entity_name.lower() in target_lower):
+                chat_names_cache[dialog.id] = entity_name
+                return dialog.id
+            count += 1
+    except Exception as e:
+        log(f"⚠️ Search error: {str(e)[:80]}")
+    return None
 
 def build_paused_section():
-    """ساخت بخش چت‌های pause شده برای پرامپت"""
     if not owner_last_seen:
         return "=== PAUSED CHATS ===\nهیچ چتی pause نیست."
     
     lines = ["=== PAUSED CHATS (current) ==="]
+    found = False
     for chat_id in list(owner_last_seen.keys()):
         remaining = pause_remaining(chat_id)
         if remaining > 0:
+            found = True
             name = chat_names_cache.get(chat_id, "نامشخص")
-            lines.append(f"- نام: {name} | chat_id: {chat_id} | باقی‌مونده: {remaining//60} دقیقه و {remaining%60} ثانیه")
+            duration_min = get_pause_duration(chat_id) // 60
+            custom = " (custom)" if chat_id in custom_pause_durations else ""
+            lines.append(f"- نام: {name} | chat_id: {chat_id} | مدت کل: {duration_min}دقیقه{custom} | باقی‌مونده: {remaining//60}د {remaining%60}ث")
     
-    if len(lines) == 1:
+    if not found:
         return "=== PAUSED CHATS ===\nهیچ چتی pause نیست."
     
     return "\n".join(lines)
+
+def build_global_mute_section():
+    if is_globally_muted():
+        remaining = int(global_mute_until - time.time())
+        return f"=== GLOBAL MUTE ===\n⚠️ ربات الان در حالت سکوت سراسری است. {remaining//60} دقیقه و {remaining%60} ثانیه باقی مانده."
+    return ""
+
+# ============ Forward / Context helpers ============
+async def forward_last_messages(chat_id, count=1):
+    """فوروارد آخرین N پیام به Saved Messages"""
+    try:
+        messages = await client.get_messages(chat_id, limit=count)
+        if not messages:
+            return 0, "هیچ پیامی پیدا نشد"
+        await client.forward_messages("me", messages)
+        return len(messages), None
+    except Exception as e:
+        return 0, str(e)
+
+async def show_context(chat_id, count=5):
+    """نمایش متن آخرین N پیام"""
+    try:
+        messages = await client.get_messages(chat_id, limit=count)
+        if not messages:
+            return "هیچ پیامی نیست"
+        lines = []
+        for msg in reversed(messages):
+            sender = "من" if msg.out else "کاربر"
+            text = msg.text or "[رسانه/ویس/عکس]"
+            if len(text) > 150:
+                text = text[:150] + "..."
+            lines.append(f"{sender}: {text}")
+        return "\n".join(lines)
+    except Exception as e:
+        return f"خطا: {str(e)[:100]}"
 
 # ============ GitHub Memory ============
 def github_headers():
@@ -180,7 +257,7 @@ def fetch_memory():
         else:
             log(f"⚠️ GitHub fetch: {r.status_code}")
     except Exception as e:
-        log(f"⚠️ GitHub fetch exception: {e}")
+        log(f"⚠️ GitHub fetch exception: {str(e)[:100]}")
     return empty, None
 
 def push_memory(mem):
@@ -204,7 +281,7 @@ def push_memory(mem):
         else:
             log(f"⚠️ GitHub push: {r.status_code}")
     except Exception as e:
-        log(f"⚠️ GitHub push exception: {e}")
+        log(f"⚠️ GitHub push exception: {str(e)[:100]}")
 
 def save_memory_async():
     loop = asyncio.get_event_loop()
@@ -272,6 +349,7 @@ def build_prompt(user_id, new_message, is_owner=False):
         vpref = get_voice_pref("owner")
         vblock = voice_status_block(vpref, is_owner=True)
         paused_section = build_paused_section()
+        mute_section = build_global_mute_section()
         prompt = f"""You are the personal AI assistant of {OWNER_NAME}.
 You are talking to {OWNER_NAME} THEMSELVES in their Saved Messages.
 This is your boss. Be warm, friendly, casual — like a close friend.
@@ -281,45 +359,79 @@ This is your boss. Be warm, friendly, casual — like a close friend.
 
 {paused_section}
 
-=== SPECIAL POWERS ===
-You can secretly modify your own memory. Output ONLY the tag on a single line:
+{mute_section}
 
-[LEARN: key | value]      — remember a specific fact
-[LEARN_RAW: text]         — remember a general fact
-[FORGET: key]             — forget a fact
-[SHOW_MEMORY]             — show everything
+=== SPECIAL POWERS (OWNER ONLY) ===
 
-=== PAUSE MANAGEMENT ===
-You can also unpause chats that are currently paused (see PAUSED CHATS section above).
+**Memory:**
+[LEARN: key | value]  — remember a fact
+[LEARN_RAW: text]     — remember a general fact
+[FORGET: key]         — forget a fact
+[SHOW_MEMORY]         — show everything
 
-When the owner asks to unpause/cancel/resume a specific chat:
-- Persian examples: "پاز علی رو لغو کن"، "مکث علی رو بردار"، "علی رو آزاد کن"، "پاز اون چت رو لغو کن"
-- English examples: "unpause Ali", "resume chat with Ali", "cancel pause for Ali"
-→ Find the matching chat in PAUSED CHATS by name (fuzzy match is OK).
-→ Output tag: [UNPAUSE: chat_id]  (using the numeric chat_id from the list)
+**Pause management:**
+[PAUSE: target | minutes]    — pause a chat for X minutes (default = global pause_duration)
+[PAUSE_FOREVER: target]      — pause a chat indefinitely (until manual unpause)
+[UNPAUSE: target]            — unpause a specific chat
+[UNPAUSE_ALL]                — unpause everything
 
-When the owner asks to unpause ALL chats:
-- Persian: "همه رو آزاد کن"، "همه پازها رو لغو کن"، "همه رو resume کن"
-- English: "unpause all", "resume all"
-→ Output tag: [UNPAUSE_ALL]
+**Message retrieval:**
+[FORWARD: target | count]    — forward last N messages from a chat to Saved Messages
+[CONTEXT: target]            — show last 5 messages from a chat as text (without forwarding)
 
-When the owner asks WHO is paused:
-- Persian: "کی pause هست؟"، "چه کسی رو pause کردم؟"
-- English: "who is paused?", "list paused chats"
-→ Just list them in your reply naturally. NO tags.
+**Global mute (silence everything):**
+[GLOBAL_MUTE: minutes]       — mute ALL bot responses for X minutes
+[GLOBAL_UNMUTE]              — unmute immediately
 
-When the owner asks to INCREASE/CHANGE pause duration for a specific chat, that's not supported — just say so.
+⚠️ TARGET: can be a numeric chat_id OR a name (Persian or English). System resolves names.
+⚠️ After outputting a tag, you can add a short confirmation text BEFORE or AFTER. The tag MUST be on its own line.
 
-⚠️ CRITICAL: After outputting [UNPAUSE: ...] or [UNPAUSE_ALL], you can add a short confirmation message BEFORE or AFTER the tag. But the tag MUST be on its own line.
+=== EXAMPLES ===
 
-Example:
+Owner: علی رو 2 ساعت pause کن
+You: باشه، علی رو ۲ ساعت pause کردم ✋
+[PAUSE: علی | 120]
+
+Owner: این چت رو دائمی pause کن
+You: حله، تا وقتی خودت unpause نکنی ساکت می‌مونه 🛑
+[PAUSE_FOREVER: 123456789]
+
 Owner: پاز علی رو لغو کن
-You: باشه، دارم آزادش می‌کنم ✅
-[UNPAUSE: 12345]
+You: باشه آزادش کردم ✅
+[UNPAUSE: علی]
 
-=== MEMORY SAVE RULES ===
-DO save ONLY if the owner says "یادت باشه..." / "به خاطر بسپار..." / "remember..." / "فراموش کن..."
-DO NOT save for normal chat, questions, jokes.
+Owner: همه رو آزاد کن
+You: همه چت‌ها آزاد شدن ✅
+[UNPAUSE_ALL]
+
+Owner: پیام‌های آخر علی رو برام فوروارد کن
+You: باشه، ۵ پیام آخرش رو می‌فرستم 📨
+[FORWARD: علی | 5]
+
+Owner: علی آخرین بار چی گفت؟
+You: بذار ببینم...
+[CONTEXT: علی]
+
+Owner: پیام آیدی 123456789 رو برام فوروارد کن
+You: باشه ✅
+[FORWARD: 123456789 | 1]
+
+Owner: 30 دقیقه همه رو ساکت کن (به کسی جواب نده)
+You: باشه ۳۰ دقیقه ساکت می‌شم 🤐
+[GLOBAL_MUTE: 30]
+
+Owner: دیگه ساکت نباش
+You: باشه دوباره فعال شدم ✨
+[GLOBAL_UNMUTE]
+
+Owner: کی pause هست؟
+You: [list naturally from PAUSED CHATS section, NO tags]
+
+Owner: یادت باشه اسم بهترین دوستم علیه
+You: [LEARN: best_friend | Ali]
+
+=== MEMORY RULES ===
+DO save ONLY if owner says "یادت باشه..." / "به خاطر بسپار..." / "remember..." / "فراموش کن..."
 
 {vblock}
 
@@ -425,7 +537,7 @@ async def send_alert(alert_text):
         )
         log("🔔 Alert sent")
     except Exception as e:
-        log(f"⚠️ ntfy error: {e}")
+        log(f"⚠️ ntfy error: {str(e)[:80]}")
 
 async def transcribe_voice(voice_path):
     started = time.time()
@@ -439,7 +551,7 @@ async def transcribe_voice(voice_path):
             if len(audio_data) < 100:
                 return None
         except Exception as e:
-            log(f"⚠️ File read error: {e}")
+            log(f"⚠️ File read error: {str(e)[:80]}")
             return None
 
         for model_name in STT_MODELS:
@@ -557,7 +669,7 @@ async def text_to_voice(text, voice=None):
             return None
         return ogg_path
     except Exception as e:
-        log(f"⚠️ Voice gen error: {e}")
+        log(f"⚠️ Voice gen error: {str(e)[:80]}")
         return None
 
 async def send_voice_reply(chat_id, reply_to_id, text):
@@ -570,7 +682,7 @@ async def send_voice_reply(chat_id, reply_to_id, text):
         await client.send_file(chat_id, voice_path, voice_note=True, reply_to=reply_to_id)
         log("🎤 Voice sent")
     except Exception as e:
-        log(f"⚠️ Voice send error: {e}")
+        log(f"⚠️ Voice send error: {str(e)[:80]}")
     finally:
         try:
             os.unlink(voice_path)
@@ -620,6 +732,7 @@ async def api_status(request):
             "notes_count": len(memory.get("owner_notes", [])),
             "voice_prefs_count": len(memory.get("voice_preferences", {})),
             "paused_chats_count": sum(1 for cid in owner_last_seen if is_owner_paused(cid)),
+            "globally_muted": is_globally_muted(),
             "settings": runtime_settings,
         })
     except Exception as e:
@@ -667,6 +780,7 @@ async def api_paused_list(request):
                 "chat_id": chat_id,
                 "name": name,
                 "remaining_seconds": remaining,
+                "custom_duration": custom_pause_durations.get(chat_id),
             })
     paused.sort(key=lambda x: x["remaining_seconds"])
     return json_response({"paused": paused})
@@ -677,16 +791,19 @@ async def api_pause(request):
     try:
         data = await request.json()
         chat_id = int(data.get("chat_id"))
+        duration = data.get("duration")  # optional, seconds
     except:
         return json_response({"error": "chat_id required"}, 400)
     owner_last_seen[chat_id] = time.time()
+    if duration:
+        custom_pause_durations[chat_id] = int(duration)
     if chat_id not in chat_names_cache:
         try:
             asyncio.create_task(cache_chat_name(chat_id))
         except:
             pass
-    log(f"🛑 Paused {chat_id}")
-    return json_response({"ok": True, "chat_id": chat_id, "remaining": runtime_settings["pause_duration"]})
+    log(f"🛑 Paused {chat_id} for {get_pause_duration(chat_id)//60}m")
+    return json_response({"ok": True, "chat_id": chat_id, "remaining": get_pause_duration(chat_id)})
 
 async def api_resume(request):
     if not api_auth(request):
@@ -696,8 +813,8 @@ async def api_resume(request):
         chat_id = int(data.get("chat_id"))
     except:
         return json_response({"error": "chat_id required"}, 400)
-    if chat_id in owner_last_seen:
-        del owner_last_seen[chat_id]
+    owner_last_seen.pop(chat_id, None)
+    custom_pause_durations.pop(chat_id, None)
     log(f"▶️ Resumed {chat_id}")
     return json_response({"ok": True})
 
@@ -706,6 +823,7 @@ async def api_resume_all(request):
         return json_response({"error": "Unauthorized"}, 401)
     count = len(owner_last_seen)
     owner_last_seen.clear()
+    custom_pause_durations.clear()
     log(f"▶️ Resumed all ({count} chats)")
     return json_response({"ok": True, "cleared": count})
 
@@ -771,7 +889,7 @@ def create_app():
     return app
 
 
-# ============ ردیاب فعالیت تو در DM ها ============
+# ============ ردیاب فعالیت ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_activity(event):
     if not event.is_private:
@@ -782,6 +900,9 @@ async def on_owner_activity(event):
         return
     if event.chat_id == me.id:
         return
+    # اگه forwarded پیام باشه، نادیده بگیر
+    if getattr(event.message, 'forward', None):
+        return
     mark_owner_active(event.chat_id)
     remaining = pause_remaining(event.chat_id)
     log(f"🛑 Paused chat {event.chat_id} for {remaining//60}m")
@@ -790,15 +911,25 @@ async def on_owner_activity(event):
 # ============ هندلر ادمین ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_message(event):
+    global global_mute_until, last_bot_send_time
+
     try:
         me = await client.get_me()
     except Exception as e:
-        log(f"⚠️ Owner check error: {e}")
+        log(f"⚠️ Owner check error: {str(e)[:80]}")
         return
 
     if event.chat_id != me.id:
         return
     if event.sender_id != me.id:
+        return
+
+    # جلوگیری از loop
+    if time.time() - last_bot_send_time < 1.5:
+        return
+
+    # پیام‌های forward شده رو نادیده بگیر
+    if getattr(event.message, 'forward', None):
         return
 
     text = event.message.text or ""
@@ -824,66 +955,155 @@ async def on_owner_message(event):
         await event.reply("متأسفم، الان نتونستم جواب بدم. دوباره امتحان کن 🙏")
         return
 
-    # ==== پردازش UNPAUSE_ALL ====
+    # ===== UNPAUSE_ALL =====
     if "[UNPAUSE_ALL]" in raw:
         count = len(owner_last_seen)
         owner_last_seen.clear()
+        custom_pause_durations.clear()
         log(f"▶️ AI unpaused all ({count} chats)")
-        reply = raw.replace("[UNPAUSE_ALL]", "").strip()
-        reply = (
-            reply.replace("[IMPORTANT]", "")
-            .replace("[NORMAL]", "")
-            .replace("[ENABLE_VOICE]", "")
-            .replace("[DISABLE_VOICE]", "")
-            .strip()
-        )
+        reply = re.sub(r"\[UNPAUSE_ALL\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
         if not reply:
             reply = f"✅ همه {count} چت آزاد شدن"
+        last_bot_send_time = time.time()
         await event.reply(reply)
         return
 
-    # ==== پردازش UNPAUSE ====
-    if "[UNPAUSE:" in raw:
-        try:
-            inner = raw.split("[UNPAUSE:", 1)[1].split("]", 1)[0].strip()
-            target_chat_id = None
-            
-            # اول به‌عنوان عدد امتحان کن
-            try:
-                target_chat_id = int(inner)
-            except:
-                # اگه عدد نبود، بر اساس اسم بگرد
-                inner_lower = inner.lower()
-                for cid, name in chat_names_cache.items():
-                    if cid not in owner_last_seen:
-                        continue
-                    if inner_lower in name.lower() or name.lower() in inner_lower:
-                        target_chat_id = cid
-                        break
-            
-            if target_chat_id and target_chat_id in owner_last_seen:
-                del owner_last_seen[target_chat_id]
-                name = chat_names_cache.get(target_chat_id, str(target_chat_id))
-                log(f"▶️ AI unpaused {target_chat_id} ({name})")
-                
-                reply = raw.replace(f"[UNPAUSE: {inner}]", "").replace(f"[UNPAUSE:{inner}]", "")
-                reply = (
-                    reply.replace("[IMPORTANT]", "")
-                    .replace("[NORMAL]", "")
-                    .replace("[ENABLE_VOICE]", "")
-                    .replace("[DISABLE_VOICE]", "")
-                    .strip()
-                )
-                if not reply:
-                    reply = f"✅ چت «{name}» آزاد شد"
-                await event.reply(reply)
-            else:
-                await event.reply(f"❓ نتونستم چت «{inner}» رو توی لیست pause پیدا کنم")
-            return
-        except Exception as e:
-            log(f"UNPAUSE parse error: {e}")
+    # ===== UNPAUSE =====
+    m = re.search(r"\[UNPAUSE:\s*([^\]]+)\]", raw)
+    if m:
+        target = m.group(1).strip()
+        cid = await resolve_chat_id(target)
+        if cid and cid in owner_last_seen:
+            del owner_last_seen[cid]
+            custom_pause_durations.pop(cid, None)
+            name = chat_names_cache.get(cid, str(cid))
+            log(f"▶️ AI unpaused {cid} ({name})")
+            reply = re.sub(r"\[UNPAUSE:[^\]]+\]", "", raw)
+            reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+            if not reply:
+                reply = f"✅ چت «{name}» آزاد شد"
+            last_bot_send_time = time.time()
+            await event.reply(reply)
+        else:
+            await event.reply(f"❓ نتونستم چت «{target}» رو توی لیست pause پیدا کنم")
+        return
 
-    # ==== پردازش تگ‌های حافظه ====
+    # ===== PAUSE_FOREVER =====
+    m = re.search(r"\[PAUSE_FOREVER:\s*([^\]]+)\]", raw)
+    if m:
+        target = m.group(1).strip()
+        cid = await resolve_chat_id(target)
+        if cid:
+            owner_last_seen[cid] = time.time()
+            custom_pause_durations[cid] = 10 * 365 * 24 * 3600  # 10 سال
+            await cache_chat_name(cid)
+            name = chat_names_cache.get(cid, str(cid))
+            log(f"🛑 AI paused FOREVER: {cid} ({name})")
+            reply = re.sub(r"\[PAUSE_FOREVER:[^\]]+\]", "", raw)
+            reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+            if not reply:
+                reply = f"🛑 چت «{name}» برای همیشه pause شد"
+            last_bot_send_time = time.time()
+            await event.reply(reply)
+        else:
+            await event.reply(f"❓ نتونستم «{target}» رو پیدا کنم")
+        return
+
+    # ===== PAUSE with duration =====
+    m = re.search(r"\[PAUSE:\s*([^|\]]+)(?:\|\s*(\d+)\s*)?\]", raw)
+    if m:
+        target = m.group(1).strip()
+        minutes = int(m.group(2)) if m.group(2) else (runtime_settings["pause_duration"] // 60)
+        cid = await resolve_chat_id(target)
+        if cid:
+            owner_last_seen[cid] = time.time()
+            custom_pause_durations[cid] = minutes * 60
+            await cache_chat_name(cid)
+            name = chat_names_cache.get(cid, str(cid))
+            log(f"🛑 AI paused {cid} ({name}) for {minutes}m")
+            reply = re.sub(r"\[PAUSE:[^\]]+\]", "", raw)
+            reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+            if not reply:
+                reply = f"🛑 چت «{name}» برای {minutes} دقیقه pause شد"
+            last_bot_send_time = time.time()
+            await event.reply(reply)
+        else:
+            await event.reply(f"❓ نتونستم «{target}» رو پیدا کنم")
+        return
+
+    # ===== FORWARD =====
+    m = re.search(r"\[FORWARD:\s*([^|\]]+)(?:\|\s*(\d+)\s*)?\]", raw)
+    if m:
+        target = m.group(1).strip()
+        count = int(m.group(2)) if m.group(2) else 1
+        count = min(count, 20)  # حداکثر ۲۰
+        cid = await resolve_chat_id(target)
+        if cid:
+            forwarded, err = await forward_last_messages(cid, count)
+            name = chat_names_cache.get(cid, str(cid))
+            if err:
+                await event.reply(f"❌ خطا در فوروارد: {err}")
+            else:
+                log(f"📨 Forwarded {forwarded} msgs from {cid} ({name})")
+                reply = re.sub(r"\[FORWARD:[^\]]+\]", "", raw)
+                reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+                if not reply:
+                    reply = f"📨 {forwarded} پیام از «{name}» فوروارد شد"
+                last_bot_send_time = time.time()
+                await event.reply(reply)
+        else:
+            await event.reply(f"❓ نتونستم «{target}» رو پیدا کنم")
+        return
+
+    # ===== CONTEXT =====
+    m = re.search(r"\[CONTEXT:\s*([^\]]+)\]", raw)
+    if m:
+        target = m.group(1).strip()
+        cid = await resolve_chat_id(target)
+        if cid:
+            ctx = await show_context(cid, 5)
+            name = chat_names_cache.get(cid, str(cid))
+            log(f"👁️ Context from {cid} ({name})")
+            reply = re.sub(r"\[CONTEXT:[^\]]+\]", "", raw)
+            reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+            message = f"👁️ آخرین پیام‌های {name}:\n\n{ctx}"
+            if reply:
+                message = reply + "\n\n" + message
+            last_bot_send_time = time.time()
+            await event.reply(message)
+        else:
+            await event.reply(f"❓ نتونستم «{target}» رو پیدا کنم")
+        return
+
+    # ===== GLOBAL_MUTE =====
+    m = re.search(r"\[GLOBAL_MUTE:\s*(\d+)\]", raw)
+    if m:
+        minutes = int(m.group(1))
+        global_mute_until = time.time() + minutes * 60
+        log(f"🔇 Global mute for {minutes}m")
+        reply = re.sub(r"\[GLOBAL_MUTE:[^\]]+\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        if not reply:
+            reply = f"🔇 به مدت {minutes} دقیقه به هیچ‌کس جواب نمی‌دم"
+        last_bot_send_time = time.time()
+        await event.reply(reply)
+        return
+
+    # ===== GLOBAL_UNMUTE =====
+    if "[GLOBAL_UNMUTE]" in raw:
+        was_muted = is_globally_muted()
+        global_mute_until = 0
+        log("🔊 Global unmute")
+        reply = re.sub(r"\[GLOBAL_UNMUTE\]", "", raw)
+        reply = re.sub(r"\[(IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", reply).strip()
+        if not reply:
+            reply = "🔊 سکوت برداشته شد" if was_muted else "🔊 از اول هم ساکت نبودم"
+        last_bot_send_time = time.time()
+        await event.reply(reply)
+        return
+
+    # ===== Memory tags =====
     enable_voice = "[ENABLE_VOICE]" in raw
     disable_voice = "[DISABLE_VOICE]" in raw
 
@@ -894,10 +1114,11 @@ async def on_owner_message(event):
                 key, value = inner.split("|", 1)
                 memory.setdefault("learned_facts", {})[key.strip()] = value.strip()
                 save_memory_async()
+                last_bot_send_time = time.time()
                 await event.reply(f"✅ گرفتم! یادم می‌مونه: {key.strip()} → {value.strip()}")
                 return
         except Exception as e:
-            log(f"LEARN parse error: {e}")
+            log(f"LEARN parse error: {str(e)[:80]}")
 
     if "[LEARN_RAW:" in raw:
         try:
@@ -905,10 +1126,11 @@ async def on_owner_message(event):
             fact_id = f"fact_{len(memory.get('learned_facts', {})) + 1}"
             memory.setdefault("learned_facts", {})[fact_id] = inner
             save_memory_async()
+            last_bot_send_time = time.time()
             await event.reply(f"✅ گرفتم! یادم می‌مونه: {inner}")
             return
         except Exception as e:
-            log(f"LEARN_RAW parse error: {e}")
+            log(f"LEARN_RAW parse error: {str(e)[:80]}")
 
     if "[FORGET:" in raw:
         try:
@@ -917,12 +1139,14 @@ async def on_owner_message(event):
             if key in facts:
                 del facts[key]
                 save_memory_async()
+                last_bot_send_time = time.time()
                 await event.reply(f"🗑️ باشه، فراموش کردم: {key}")
             else:
+                last_bot_send_time = time.time()
                 await event.reply(f"❓ همچین چیزی توی حافظه‌ام نبود: {key}")
             return
         except Exception as e:
-            log(f"FORGET parse error: {e}")
+            log(f"FORGET parse error: {str(e)[:80]}")
 
     if "[SHOW_MEMORY]" in raw:
         facts = memory.get("learned_facts", {})
@@ -938,6 +1162,7 @@ async def on_owner_message(event):
             reply += "\n**یادداشت‌ها:**\n"
             for n in notes:
                 reply += f"• {n}\n"
+        last_bot_send_time = time.time()
         await event.reply(reply)
         return
 
@@ -958,6 +1183,7 @@ async def on_owner_message(event):
 
     histories.setdefault("owner", []).append(f"You: {reply}")
 
+    last_bot_send_time = time.time()
     await event.reply(reply)
 
     should_voice = get_voice_pref("owner") is True
@@ -970,6 +1196,11 @@ async def on_owner_message(event):
 async def on_dm(event):
     sender = await event.get_sender()
     if sender.bot or sender.id == OWNER_ID:
+        return
+
+    if is_globally_muted():
+        remaining = int(global_mute_until - time.time())
+        log(f"🔇 Global mute — skipping user {sender.id} ({remaining//60}m left)")
         return
 
     if is_owner_paused(event.chat_id):
@@ -1059,13 +1290,11 @@ async def main():
     await start_api_server()
 
     log("🚀 Userbot is running...")
-    log(f"📚 {len(memory.get('learned_facts', {}))} facts | 📝 {len(memory.get('owner_notes', []))} notes")
-    log(f"🎤 Voice prefs: {memory.get('voice_preferences', {})}")
-    log(f"🎙️ Voice input: {'enabled' if runtime_settings['voice_input'] else 'disabled'}")
-    log(f"🔊 Voice output: {'enabled' if runtime_settings['voice_output'] else 'disabled'}")
-    log(f"⏸️ Pause: {'enabled' if runtime_settings['pause_enabled'] else 'disabled'} ({runtime_settings['pause_duration']//60} min)")
-    log(f"🔐 API Key: {'set' if API_KEY != 'changeme' else 'NOT SET (danger!)'}")
-    log("🎯 AI unpause command: ENABLED")
+    log(f"📚 {len(memory.get('learned_facts', {}))} facts")
+    log(f"🎤 Voice input: {'on' if runtime_settings['voice_input'] else 'off'} | output: {'on' if runtime_settings['voice_output'] else 'off'}")
+    log(f"⏸️ Pause: {'on' if runtime_settings['pause_enabled'] else 'off'} ({runtime_settings['pause_duration']//60}min default)")
+    log(f"🔐 API Key: {'set' if API_KEY != 'changeme' else 'NOT SET'}")
+    log("🧠 AI commands: PAUSE, PAUSE_FOREVER, UNPAUSE, UNPAUSE_ALL, FORWARD, CONTEXT, GLOBAL_MUTE, GLOBAL_UNMUTE")
 
     await client.run_until_disconnected()
 
