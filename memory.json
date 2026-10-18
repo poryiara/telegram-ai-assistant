@@ -161,16 +161,23 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792345496.0,
+      "chat_id": -1001648148193,
+      "name": "EzAccess Community | جامعه ایزی اکسس",
+      "timestamp": 1792345575.0,
       "is_bot": false,
       "is_group": true
     },
     {
       "chat_id": -1004422000937,
       "name": "💬 ZEUS GAP",
-      "timestamp": 1792345452.0,
+      "timestamp": 1792345532.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792345526.0,
       "is_bot": false,
       "is_group": true
     },
@@ -206,13 +213,6 @@
       "chat_id": -1002235592095,
       "name": "Proxy MTProto پروکسی ایرانی",
       "timestamp": 1792345198.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1001648148193,
-      "name": "EzAccess Community | جامعه ایزی اکسس",
-      "timestamp": 1792345192.0,
       "is_bot": false,
       "is_group": true
     },
