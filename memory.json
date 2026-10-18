@@ -161,6 +161,13 @@
   ],
   "all_senders": [
     {
+      "chat_id": 6141437687,
+      "name": "QuickPing Vpn | فیلترشکن کوییک پینگ",
+      "timestamp": 1792346137.0,
+      "is_bot": true,
+      "is_group": false
+    },
+    {
       "chat_id": -1001900257871,
       "name": "SOSkeyNET | سوسکی نت",
       "timestamp": 1792346064.0,
@@ -187,13 +194,6 @@
       "timestamp": 1792345947.0,
       "is_bot": false,
       "is_group": true
-    },
-    {
-      "chat_id": 6141437687,
-      "name": "QuickPing Vpn | فیلترشکن کوییک پینگ",
-      "timestamp": 1792345859.0,
-      "is_bot": true,
-      "is_group": false
     },
     {
       "chat_id": -1001235816045,
