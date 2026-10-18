@@ -161,23 +161,30 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1001235816045,
-      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
-      "timestamp": 1792344505.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792344503.0,
+      "chat_id": -1004422000937,
+      "name": "💬 ZEUS GAP",
+      "timestamp": 1792344534.0,
       "is_bot": false,
       "is_group": true
     },
     {
       "chat_id": -1001648148193,
       "name": "EzAccess Community | جامعه ایزی اکسس",
-      "timestamp": 1792344499.0,
+      "timestamp": 1792344529.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792344523.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001235816045,
+      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
+      "timestamp": 1792344518.0,
       "is_bot": false,
       "is_group": true
     },
@@ -185,13 +192,6 @@
       "chat_id": -1002778808962,
       "name": "Proxy Telegram⚡️پروکسی تلگرام",
       "timestamp": 1792344434.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1004422000937,
-      "name": "💬 ZEUS GAP",
-      "timestamp": 1792344361.0,
       "is_bot": false,
       "is_group": true
     },
