@@ -36,6 +36,7 @@ GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
 
 IGNORED_USER_IDS = {777000, 42777}
+PIPE_CHAR = chr(124)  # کاراکتر خط عمودی بدون هیچ مشکل کپی‌پیست
 
 runtime_settings = {
     "pause_enabled": True,
@@ -86,7 +87,6 @@ MODELS = [
     "gemini-3-flash",
     "gemini-3.1-flash-lite-preview",
     "gemini-3.1-flash-lite",
-    "gemini-2.5-flash-preview-05-20",
 ]
 STT_MODELS = [
     "gemini-3-flash-preview",
@@ -95,6 +95,43 @@ STT_MODELS = [
     "gemini-3.1-flash-lite",
 ]
 RETRY_DELAYS = [0.5, 1, 2, 3, 5, 8, 13, 20, 30, 30, 30]
+
+# ============ Safe Tag Helpers (No Regex Escaping Needed) ============
+def extract_tag_content(text, tag_prefix):
+    """جدا کردن محتوای داخل تگ مثل [TAG: content] بدون نیاز به Regex"""
+    marker = "[" + tag_prefix
+    idx = text.find(marker)
+    if idx == -1:
+        return None
+    start = idx + len(marker)
+    end = text.find("]", start)
+    if end == -1:
+        return None
+    return text[start:end].strip()
+
+def strip_all_system_tags(text):
+    """پاک کردن تمام تگ‌های سیستمی از متن نهایی پیام"""
+    if not text:
+        return ""
+    known_prefixes = (
+        "POPULATE_DM_SENDERS", "WHO_LAST_DM", "POPULATE_ALL_SENDERS", "WHO_LAST_ALL",
+        "SHOW_LAST_INCOMING", "SHOW_LAST_OUTGOING", "SHOW_MSG", "UNPAUSE_ALL", "UNPAUSE",
+        "PAUSE_FOREVER", "PAUSE", "FORWARD_LAST", "FORWARD", "CONTEXT", "GLOBAL_MUTE",
+        "GLOBAL_UNMUTE", "RULE_ADD", "RULE_REMOVE", "RULE_LIST", "RULE_CLEAR",
+        "PERSONALITY_SET", "PERSONALITY_CLEAR", "PERSONALITY_SHOW", "LEARN_RAW", "LEARN",
+        "FORGET", "SHOW_MEMORY", "IMPORTANT", "NORMAL", "ENABLE_VOICE", "DISABLE_VOICE"
+    )
+    out = text
+    for p in known_prefixes:
+        while True:
+            idx = out.find("[" + p)
+            if idx == -1:
+                break
+            end = out.find("]", idx)
+            if end == -1:
+                break
+            out = out[:idx] + out[end + 1:]
+    return out.strip()
 
 # ============ ProgressReporter ============
 class ProgressReporter:
@@ -421,7 +458,7 @@ def build_bot_replies_section():
         name = info.get("name") or chat_names_cache.get(cid, str(cid))
         u_txt = info.get("user_text", "")[:40]
         b_txt = info.get("text", "")[:40]
-        lines.append(f"{i}. {name} (id:{cid}) — {ago_str} | پیامش: «{u_txt}» | جواب تو: «{b_txt}»")
+        lines.append(f"{i}. {name} (id:{cid}) — {ago_str} - پیام کاربر: «{u_txt}» - جواب دستیار: «{b_txt}»")
     return "\n".join(lines)
 
 def build_all_senders_section():
@@ -643,14 +680,14 @@ def build_prompt(user_id, new_message, is_owner=False):
 {build_personality_section()}
 
 === TAGS ===
-[LEARN: k | v] · [LEARN_RAW: t] · [FORGET: k] · [SHOW_MEMORY]
-[PAUSE: target | min] · [PAUSE_FOREVER: target] · [UNPAUSE: target] · [UNPAUSE_ALL]
-[FORWARD: target | n] · [FORWARD_LAST | n] · [CONTEXT: target]
+[LEARN: k {PIPE_CHAR} v] · [LEARN_RAW: t] · [FORGET: k] · [SHOW_MEMORY]
+[PAUSE: target {PIPE_CHAR} min] · [PAUSE_FOREVER: target] · [UNPAUSE: target] · [UNPAUSE_ALL]
+[FORWARD: target {PIPE_CHAR} n] · [FORWARD_LAST {PIPE_CHAR} n] · [CONTEXT: target]
 [POPULATE_DM_SENDERS] · [WHO_LAST_DM]
 [POPULATE_ALL_SENDERS] · [WHO_LAST_ALL]
 [SHOW_LAST_INCOMING: target] — forward آخرین پیام کاربر
 [SHOW_LAST_OUTGOING: target] — forward آخرین پاسخ ربات
-[SHOW_MSG: target | n]
+[SHOW_MSG: target {PIPE_CHAR} n]
 [GLOBAL_MUTE: min] · [GLOBAL_UNMUTE]
 [RULE_ADD: t] · [RULE_REMOVE: i] · [RULE_LIST] · [RULE_CLEAR]
 [PERSONALITY_SET: t] · [PERSONALITY_CLEAR] · [PERSONALITY_SHOW]
@@ -698,11 +735,11 @@ Example:
 - "آخرین نفری که **بهت** پیام داد" → DM (dm_senders)
 - "**کلی**" / "همه چت‌هام" → ALL (all_senders)
 
-**"بیشتر":** [SHOW_MSG: target | 5]
+**"بیشتر":** [SHOW_MSG: target {PIPE_CHAR} 5]
 
 **NEVER promise without action:**
 - ❌ "الان می‌فرستم" (بدون tag)
-- ✅ "باشه 📨\n[FORWARD_LAST | 1]"
+- ✅ "باشه 📨\n[FORWARD_LAST {PIPE_CHAR} 1]"
 
 **User says "اره"/"باشه" after offer → DO IT with tag**
 
@@ -1080,15 +1117,6 @@ def create_app():
     app.router.add_get("/api/facts", api_facts)
     return app
 
-# ============ Regex Patterns (Safe from copy/paste escaping issues) ============
-RE_CLEAN_POPULATE_DM = re.compile(r"\[(?:POPULATE_DM_SENDERS\vert{}WHO_LAST_DM\vert{}SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]")
-RE_CLEAN_POPULATE_ALL = re.compile(r"\[(?:POPULATE_ALL_SENDERS\vert{}WHO_LAST_ALL\vert{}SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]")
-RE_CLEAN_BASIC = re.compile(r"\[(?:IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]")
-RE_SHOW_MSG = re.compile(r"\[SHOW_MSG:\s*([^\]\|]+)(?:[\|]\s*(\d+))?\]")
-RE_PAUSE = re.compile(r"\[PAUSE:\s*([^\]\|]+)(?:[\|]\s*(\d+))?\]")
-RE_FORWARD_LAST = re.compile(r"\[FORWARD_LAST(?:\s*[\Vert{}]\s*(\d+))?\]")
-RE_FORWARD = re.compile(r"\[FORWARD:\s*([^\]\|]+)(?:[\|]\s*(\d+))?\]")
-
 # ============ Owner handlers ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_activity(event):
@@ -1152,31 +1180,25 @@ async def on_owner_message(event):
         return
 
     # ===== SHOW_LAST_INCOMING + SHOW_LAST_OUTGOING =====
-    has_in = "[SHOW_LAST_INCOMING:" in raw
-    has_out = "[SHOW_LAST_OUTGOING:" in raw
-    if has_in or has_out:
-        target = None
-        if has_in:
-            target = re.search(r"\[SHOW_LAST_INCOMING:\s*([^\]]+)\]", raw).group(1).strip()
-        elif has_out:
-            target = re.search(r"\[SHOW_LAST_OUTGOING:\s*([^\]]+)\]", raw).group(1).strip()
-        
+    in_target = extract_tag_content(raw, "SHOW_LAST_INCOMING:")
+    out_target = extract_tag_content(raw, "SHOW_LAST_OUTGOING:")
+    if in_target is not None or out_target is not None:
+        target = in_target if in_target is not None else out_target
         cid = await resolve_chat_id(target)
         if cid is None:
             await safe_reply(event, f"❓ «{target}» پیدا نشد")
             return
         
         name = await cache_chat_name(cid, force=True)
-        
         progress = ProgressReporter(event.chat_id, f"⏳ دارم پیام‌های {name} رو فوروارد می‌کنم...", interval=10)
         progress.start()
         forwarded_parts = []
         try:
-            if has_in:
+            if in_target is not None:
                 ok = await forward_last_incoming(cid)
                 if ok:
                     forwarded_parts.append("📩 پیام کاربر")
-            if has_out:
+            if out_target is not None:
                 ok = await forward_last_outgoing(cid)
                 if ok:
                     forwarded_parts.append("🤖 پاسخ ربات")
@@ -1204,7 +1226,7 @@ async def on_owner_message(event):
             prompt2 = build_prompt("owner", text + " [لیست DM ها از تلگرام آپدیت شد، حالا دقیق جواب بده]", is_owner=True)
             raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id, with_progress=True)
             if raw2:
-                r = RE_CLEAN_POPULATE_DM.sub("", raw2).strip()
+                r = strip_all_system_tags(raw2)
                 if r:
                     histories.setdefault("owner", []).append(f"You: {r}")
                     await safe_reply(event, r)
@@ -1230,7 +1252,7 @@ async def on_owner_message(event):
             prompt2 = build_prompt("owner", text + " [لیست همه چت‌ها از تلگرام آپدیت شد، حالا دقیق جواب بده]", is_owner=True)
             raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id, with_progress=True)
             if raw2:
-                r = RE_CLEAN_POPULATE_ALL.sub("", raw2).strip()
+                r = strip_all_system_tags(raw2)
                 if r:
                     histories.setdefault("owner", []).append(f"You: {r}")
                     await safe_reply(event, r)
@@ -1255,7 +1277,7 @@ async def on_owner_message(event):
         if not dm_senders:
             await safe_reply(event, "❓ DM پیدا نشد")
             return
-        r = RE_CLEAN_BASIC.sub("", raw.replace("[WHO_LAST_DM]", "")).strip()
+        r = strip_all_system_tags(raw)
         if r:
             histories.setdefault("owner", []).append(f"You: {r}")
             await safe_reply(event, r)
@@ -1278,7 +1300,7 @@ async def on_owner_message(event):
         if not all_senders:
             await safe_reply(event, "❓ پیام پیدا نشد")
             return
-        r = RE_CLEAN_BASIC.sub("", raw.replace("[WHO_LAST_ALL]", "")).strip()
+        r = strip_all_system_tags(raw)
         if r:
             histories.setdefault("owner", []).append(f"You: {r}")
             await safe_reply(event, r)
@@ -1290,10 +1312,13 @@ async def on_owner_message(event):
         return
 
     # ===== SHOW_MSG =====
-    m = RE_SHOW_MSG.search(raw)
-    if m:
-        target = m.group(1).strip()
-        count = min(int(m.group(2)) if m.group(2) else 5, 20)
+    show_msg_inner = extract_tag_content(raw, "SHOW_MSG:")
+    if show_msg_inner is not None:
+        parts = show_msg_inner.split(PIPE_CHAR)
+        target = parts[0].strip()
+        count = 5
+        if len(parts) > 1 and parts[1].strip().isdigit():
+            count = min(int(parts[1].strip()), 20)
         cid = await resolve_chat_id(target)
         if cid is None:
             await safe_reply(event, f"❓ «{target}» پیدا نشد")
@@ -1314,26 +1339,25 @@ async def on_owner_message(event):
         owner_last_seen.clear()
         custom_pause_durations.clear()
         track_action("UNPAUSE_ALL", c)
-        r = RE_CLEAN_BASIC.sub("", raw.replace("[UNPAUSE_ALL]", "")).strip()
+        r = strip_all_system_tags(raw)
         if not r:
             r = f"✅ همه {c} چت آزاد شدن"
         await safe_reply(event, r)
         return
 
     # ===== UNPAUSE =====
-    m = re.search(r"\[UNPAUSE:\s*([^\]]+)\]", raw)
-    if m:
-        target = m.group(1).strip()
-        cid = await resolve_chat_id(target)
+    unpause_target = extract_tag_content(raw, "UNPAUSE:")
+    if unpause_target is not None:
+        cid = await resolve_chat_id(unpause_target)
         if cid is None:
-            await safe_reply(event, f"❓ «{target}» پیدا نشد")
+            await safe_reply(event, f"❓ «{unpause_target}» پیدا نشد")
             return
         name = await cache_chat_name(cid, force=True)
         if cid in owner_last_seen:
             del owner_last_seen[cid]
             custom_pause_durations.pop(cid, None)
             track_action("UNPAUSE", cid, name)
-            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[UNPAUSE:[^\]]+\]", "", raw)).strip()
+            r = strip_all_system_tags(raw)
             if not r:
                 r = f"✅ «{name}» آزاد شد"
         else:
@@ -1342,35 +1366,37 @@ async def on_owner_message(event):
         return
 
     # ===== PAUSE_FOREVER =====
-    m = re.search(r"\[PAUSE_FOREVER:\s*([^\]]+)\]", raw)
-    if m:
-        target = m.group(1).strip()
-        cid = await resolve_chat_id(target)
+    pause_forever_target = extract_tag_content(raw, "PAUSE_FOREVER:")
+    if pause_forever_target is not None:
+        cid = await resolve_chat_id(pause_forever_target)
         if cid:
             owner_last_seen[cid] = time.time()
             custom_pause_durations[cid] = 10 * 365 * 24 * 3600
             name = await cache_chat_name(cid, force=True)
             track_action("PAUSE_FOREVER", cid, name)
-            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[PAUSE_FOREVER:[^\]]+\]", "", raw)).strip()
+            r = strip_all_system_tags(raw)
             if not r:
                 r = f"🛑 «{name}» دائمی"
             await safe_reply(event, r)
         else:
-            await safe_reply(event, f"❓ «{target}» پیدا نشد")
+            await safe_reply(event, f"❓ «{pause_forever_target}» پیدا نشد")
         return
 
     # ===== PAUSE =====
-    m = RE_PAUSE.search(raw)
-    if m:
-        target = m.group(1).strip()
-        mins = int(m.group(2)) if m.group(2) else (runtime_settings["pause_duration"] // 60)
+    pause_inner = extract_tag_content(raw, "PAUSE:")
+    if pause_inner is not None:
+        parts = pause_inner.split(PIPE_CHAR)
+        target = parts[0].strip()
+        mins = runtime_settings["pause_duration"] // 60
+        if len(parts) > 1 and parts[1].strip().isdigit():
+            mins = int(parts[1].strip())
         cid = await resolve_chat_id(target)
         if cid:
             owner_last_seen[cid] = time.time()
             custom_pause_durations[cid] = mins * 60
             name = await cache_chat_name(cid, force=True)
             track_action("PAUSE", cid, f"{name} {mins}m")
-            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[PAUSE:[^\]]+\]", "", raw)).strip()
+            r = strip_all_system_tags(raw)
             if not r:
                 r = f"🛑 «{name}» {mins}د"
             await safe_reply(event, r)
@@ -1379,9 +1405,12 @@ async def on_owner_message(event):
         return
 
     # ===== FORWARD_LAST =====
-    m = RE_FORWARD_LAST.search(raw)
-    if m:
-        count = min(int(m.group(1)) if m.group(1) else 1, 20)
+    fwd_last_inner = extract_tag_content(raw, "FORWARD_LAST")
+    if fwd_last_inner is not None:
+        count = 1
+        cleaned_num = fwd_last_inner.replace(PIPE_CHAR, "").replace(":", "").strip()
+        if cleaned_num.isdigit():
+            count = min(int(cleaned_num), 20)
         if not dm_senders:
             progress = ProgressReporter(event.chat_id, "⏳ دارم دنبال آخرین DM می‌گردم...", interval=10)
             progress.start()
@@ -1404,17 +1433,20 @@ async def on_owner_message(event):
             await safe_reply(event, f"❌ {err}")
         else:
             track_action("FORWARD_LAST", last["chat_id"], last["name"])
-            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[FORWARD_LAST[^\]]*\]", "", raw)).strip()
+            r = strip_all_system_tags(raw)
             if not r:
                 r = f"📨 {fwd} پیام از «{last['name']}» فوروارد شد"
             await safe_reply(event, r)
         return
 
     # ===== FORWARD =====
-    m = RE_FORWARD.search(raw)
-    if m:
-        target = m.group(1).strip()
-        count = min(int(m.group(2)) if m.group(2) else 1, 20)
+    fwd_inner = extract_tag_content(raw, "FORWARD:")
+    if fwd_inner is not None:
+        parts = fwd_inner.split(PIPE_CHAR)
+        target = parts[0].strip()
+        count = 1
+        if len(parts) > 1 and parts[1].strip().isdigit():
+            count = min(int(parts[1].strip()), 20)
         cid = await resolve_chat_id(target)
         if cid:
             name = await cache_chat_name(cid, force=True)
@@ -1428,7 +1460,7 @@ async def on_owner_message(event):
                 await safe_reply(event, f"❌ {err}")
             else:
                 track_action("FORWARD", cid, f"{name} {fwd}")
-                r = RE_CLEAN_BASIC.sub("", re.sub(r"\[FORWARD:[^\]]+\]", "", raw)).strip()
+                r = strip_all_system_tags(raw)
                 if not r:
                     r = f"📨 {fwd} پیام از «{name}» فوروارد شد"
                 await safe_reply(event, r)
@@ -1437,10 +1469,9 @@ async def on_owner_message(event):
         return
 
     # ===== CONTEXT =====
-    m = re.search(r"\[CONTEXT:\s*([^\]]+)\]", raw)
-    if m:
-        target = m.group(1).strip()
-        cid = await resolve_chat_id(target)
+    ctx_target = extract_tag_content(raw, "CONTEXT:")
+    if ctx_target is not None:
+        cid = await resolve_chat_id(ctx_target)
         if cid:
             name = await cache_chat_name(cid, force=True)
             progress = ProgressReporter(event.chat_id, f"⏳ دارم پیام‌های {name} رو می‌گیرم...", interval=10)
@@ -1451,16 +1482,16 @@ async def on_owner_message(event):
                 await progress.stop()
             await safe_reply(event, f"👁️ {name}:\n\n{ctx}")
         else:
-            await safe_reply(event, f"❓ «{target}» پیدا نشد")
+            await safe_reply(event, f"❓ «{ctx_target}» پیدا نشد")
         return
 
     # ===== GLOBAL_MUTE =====
-    m = re.search(r"\[GLOBAL_MUTE:\s*(\d+)\]", raw)
-    if m:
-        mins = int(m.group(1))
+    mute_inner = extract_tag_content(raw, "GLOBAL_MUTE:")
+    if mute_inner is not None and mute_inner.isdigit():
+        mins = int(mute_inner)
         global_mute_until = time.time() + mins * 60
         track_action("GLOBAL_MUTE", f"{mins}m")
-        r = RE_CLEAN_BASIC.sub("", re.sub(r"\[GLOBAL_MUTE:[^\]]+\]", "", raw)).strip()
+        r = strip_all_system_tags(raw)
         if not r:
             r = f"🔇 {mins} دقیقه ساکت شدم"
         await safe_reply(event, r)
@@ -1469,35 +1500,34 @@ async def on_owner_message(event):
     # ===== GLOBAL_UNMUTE =====
     if "[GLOBAL_UNMUTE]" in raw:
         global_mute_until = 0
-        r = RE_CLEAN_BASIC.sub("", raw.replace("[GLOBAL_UNMUTE]", "")).strip()
+        r = strip_all_system_tags(raw)
         if not r:
             r = "🔊 آنمیوت شدم"
         await safe_reply(event, r)
         return
 
     # ===== Rules =====
-    m = re.search(r"\[RULE_ADD:\s*([^\]]+)\]", raw)
-    if m:
-        rule = m.group(1).strip()
+    rule_add_inner = extract_tag_content(raw, "RULE_ADD:")
+    if rule_add_inner is not None:
         memory.setdefault("custom_rules", [])
-        if rule not in memory["custom_rules"]:
-            memory["custom_rules"].append(rule)
+        if rule_add_inner not in memory["custom_rules"]:
+            memory["custom_rules"].append(rule_add_inner)
             save_memory_async()
-            track_action("RULE_ADD", rule[:40])
-        r = RE_CLEAN_BASIC.sub("", re.sub(r"\[RULE_ADD:[^\]]+\]", "", raw)).strip()
+            track_action("RULE_ADD", rule_add_inner[:40])
+        r = strip_all_system_tags(raw)
         if not r:
-            r = f"✅ قانون #{len(memory['custom_rules'])}\n📏 {rule}"
+            r = f"✅ قانون #{len(memory['custom_rules'])}\n📏 {rule_add_inner}"
         await safe_reply(event, r)
         return
 
-    m = re.search(r"\[RULE_REMOVE:\s*(\d+)\]", raw)
-    if m:
-        idx = int(m.group(1)) - 1
+    rule_rem_inner = extract_tag_content(raw, "RULE_REMOVE:")
+    if rule_rem_inner is not None and rule_rem_inner.isdigit():
+        idx = int(rule_rem_inner) - 1
         rules = memory.get("custom_rules", [])
         if 0 <= idx < len(rules):
             removed = rules.pop(idx)
             save_memory_async()
-            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[RULE_REMOVE:\d+\]", "", raw)).strip()
+            r = strip_all_system_tags(raw)
             if not r:
                 r = f"🗑️ {removed}"
             await safe_reply(event, r)
@@ -1517,27 +1547,26 @@ async def on_owner_message(event):
         c = len(memory.get("custom_rules", []))
         memory["custom_rules"] = []
         save_memory_async()
-        r = RE_CLEAN_BASIC.sub("", raw.replace("[RULE_CLEAR]", "")).strip()
+        r = strip_all_system_tags(raw)
         if not r:
             r = f"🧹 {c} قانون پاک شد"
         await safe_reply(event, r)
         return
 
-    m = re.search(r"\[PERSONALITY_SET:\s*([^\]]+)\]", raw)
-    if m:
-        p = m.group(1).strip()
-        memory["personality_override"] = p
+    pers_inner = extract_tag_content(raw, "PERSONALITY_SET:")
+    if pers_inner is not None:
+        memory["personality_override"] = pers_inner
         save_memory_async()
-        r = RE_CLEAN_BASIC.sub("", re.sub(r"\[PERSONALITY_SET:[^\]]+\]", "", raw)).strip()
+        r = strip_all_system_tags(raw)
         if not r:
-            r = f"🎭 شخصیت تغییر کرد:\n{p}"
+            r = f"🎭 شخصیت تغییر کرد:\n{pers_inner}"
         await safe_reply(event, r)
         return
 
     if "[PERSONALITY_CLEAR]" in raw:
         memory["personality_override"] = ""
         save_memory_async()
-        r = RE_CLEAN_BASIC.sub("", raw.replace("[PERSONALITY_CLEAR]", "")).strip()
+        r = strip_all_system_tags(raw)
         if not r:
             r = "🎭 پیش‌فرض"
         await safe_reply(event, r)
@@ -1547,42 +1576,32 @@ async def on_owner_message(event):
     enable_voice = "[ENABLE_VOICE]" in raw
     disable_voice = "[DISABLE_VOICE]" in raw
 
-    if "[LEARN:" in raw:
-        try:
-            inner = raw.split("[LEARN:", 1)[1].split("]", 1)[0].strip()
-            if "|" in inner:
-                k, v = inner.split("|", 1)
-                memory.setdefault("learned_facts", {})[k.strip()] = v.strip()
-                save_memory_async()
-                await safe_reply(event, f"✅ گرفتم: {k.strip()} → {v.strip()}")
-                return
-        except:
-            pass
+    learn_inner = extract_tag_content(raw, "LEARN:")
+    if learn_inner is not None and PIPE_CHAR in learn_inner:
+        k, v = learn_inner.split(PIPE_CHAR, 1)
+        memory.setdefault("learned_facts", {})[k.strip()] = v.strip()
+        save_memory_async()
+        await safe_reply(event, f"✅ گرفتم: {k.strip()} → {v.strip()}")
+        return
 
-    if "[LEARN_RAW:" in raw:
-        try:
-            inner = raw.split("[LEARN_RAW:", 1)[1].split("]", 1)[0].strip()
-            fid = f"fact_{len(memory.get('learned_facts', {})) + 1}"
-            memory.setdefault("learned_facts", {})[fid] = inner
+    learn_raw_inner = extract_tag_content(raw, "LEARN_RAW:")
+    if learn_raw_inner is not None:
+        fid = f"fact_{len(memory.get('learned_facts', {})) + 1}"
+        memory.setdefault("learned_facts", {})[fid] = learn_raw_inner
+        save_memory_async()
+        await safe_reply(event, f"✅ گرفتم: {learn_raw_inner}")
+        return
+
+    forget_inner = extract_tag_content(raw, "FORGET:")
+    if forget_inner is not None:
+        facts = memory.get("learned_facts", {})
+        if forget_inner in facts:
+            del facts[forget_inner]
             save_memory_async()
-            await safe_reply(event, f"✅ گرفتم: {inner}")
-            return
-        except:
-            pass
-
-    if "[FORGET:" in raw:
-        try:
-            k = raw.split("[FORGET:", 1)[1].split("]", 1)[0].strip()
-            facts = memory.get("learned_facts", {})
-            if k in facts:
-                del facts[k]
-                save_memory_async()
-                await safe_reply(event, f"🗑️ فراموش: {k}")
-            else:
-                await safe_reply(event, f"❓ {k} نبود")
-            return
-        except:
-            pass
+            await safe_reply(event, f"🗑️ فراموش: {forget_inner}")
+        else:
+            await safe_reply(event, f"❓ {forget_inner} نبود")
+        return
 
     if "[SHOW_MEMORY]" in raw:
         facts = memory.get("learned_facts", {})
@@ -1600,7 +1619,7 @@ async def on_owner_message(event):
     elif disable_voice:
         set_voice_pref("owner", False)
 
-    reply = RE_CLEAN_BASIC.sub("", raw).strip()
+    reply = strip_all_system_tags(raw)
     if not reply:
         return
 
@@ -1678,7 +1697,7 @@ async def on_incoming(event):
     elif disable_voice:
         set_voice_pref(user_key, False)
 
-    reply = RE_CLEAN_BASIC.sub("", raw).strip()
+    reply = strip_all_system_tags(raw)
 
     if important:
         try:
