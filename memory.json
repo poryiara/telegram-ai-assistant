@@ -161,16 +161,23 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1004422000937,
-      "name": "💬 ZEUS GAP",
-      "timestamp": 1792345889.0,
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792345969.0,
       "is_bot": false,
       "is_group": true
     },
     {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792345878.0,
+      "chat_id": -1004422000937,
+      "name": "💬 ZEUS GAP",
+      "timestamp": 1792345947.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002743102065,
+      "name": "•Proxy & Config• 2️⃣",
+      "timestamp": 1792345947.0,
       "is_bot": false,
       "is_group": true
     },
@@ -180,13 +187,6 @@
       "timestamp": 1792345859.0,
       "is_bot": true,
       "is_group": false
-    },
-    {
-      "chat_id": -1002743102065,
-      "name": "•Proxy & Config• 2️⃣",
-      "timestamp": 1792345840.0,
-      "is_bot": false,
-      "is_group": true
     },
     {
       "chat_id": -1001235816045,
