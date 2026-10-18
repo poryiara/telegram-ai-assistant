@@ -19,16 +19,23 @@
   "personality_override": "",
   "dm_senders": [
     {
-      "chat_id": 6657424137,
-      "name": "Maman♥️",
-      "timestamp": 1792249930.0,
+      "chat_id": 7972829021,
+      "name": "Soheyl class",
+      "timestamp": 1792340573.0,
       "is_bot": false,
       "is_group": false
     },
     {
-      "chat_id": 7972829021,
-      "name": "Soheyl class",
-      "timestamp": 1792228033.0,
+      "chat_id": 6657424137,
+      "name": "Maman♥️",
+      "timestamp": 1792266788.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7002125861,
+      "name": "Baba♥️",
+      "timestamp": 1792263740.0,
       "is_bot": false,
       "is_group": false
     },
@@ -36,20 +43,6 @@
       "chat_id": 8584079030,
       "name": "امیر",
       "timestamp": 1792227344.0,
-      "is_bot": false,
-      "is_group": false
-    },
-    {
-      "chat_id": 777000,
-      "name": "Telegram",
-      "timestamp": 1792181124.0,
-      "is_bot": false,
-      "is_group": false
-    },
-    {
-      "chat_id": 7002125861,
-      "name": "Baba♥️",
-      "timestamp": 1792176673.0,
       "is_bot": false,
       "is_group": false
     },
@@ -122,13 +115,188 @@
       "timestamp": 1783548578.0,
       "is_bot": false,
       "is_group": false
+    },
+    {
+      "chat_id": 2144375412,
+      "name": "Sajad",
+      "timestamp": 1783439467.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7127011004,
+      "name": "Supp ( RED VOUCHER )",
+      "timestamp": 1781995589.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 891334848,
+      "name": "A@D",
+      "timestamp": 1781881047.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7510766056,
+      "name": "7510766056",
+      "timestamp": 1781878348.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 8051354053,
+      "name": "MR",
+      "timestamp": 1781460013.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 120184499,
+      "name": "pouya",
+      "timestamp": 1781408014.0,
+      "is_bot": false,
+      "is_group": false
     }
   ],
   "all_senders": [
     {
+      "chat_id": -1004422000937,
+      "name": "💬 ZEUS GAP",
+      "timestamp": 1792341870.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
       "chat_id": -1004493034300,
       "name": "storeBat LIVE update",
-      "timestamp": 1792250955.4785442,
+      "timestamp": 1792341866.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001648148193,
+      "name": "EzAccess Community | جامعه ایزی اکسس",
+      "timestamp": 1792341842.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002743102065,
+      "name": "•Proxy & Config• 2️⃣",
+      "timestamp": 1792341842.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001235816045,
+      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
+      "timestamp": 1792341829.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002021302234,
+      "name": "کانفیگ پلاس | گیگی 3ت آنی💥",
+      "timestamp": 1792341727.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001900257871,
+      "name": "SOSkeyNET | سوسکی نت",
+      "timestamp": 1792341338.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1003782607343,
+      "name": "AmyraxVPN | Chat",
+      "timestamp": 1792341196.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1003907392945,
+      "name": "IR NETLIFY GAP",
+      "timestamp": 1792341101.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": 7972829021,
+      "name": "Soheyl class",
+      "timestamp": 1792340573.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": -1001551340807,
+      "name": "🐳کانفیگ ویتوری اینجکتور کاستوم نپسترنت رایگان اینترنت آزاد 𝘾𝙊𝙉𝙁𝙄𝙂 𝙑𝟤𝙍𝘼𝙔𝙉𝙂 𝙄𝙉𝙅𝙀𝘾𝙏𝙊𝙍 𝘾𝙐𝙎𝙏𝙊𝙈 𝙉𝙋𝙑 🐳",
+      "timestamp": 1792340531.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001836809801,
+      "name": "سرور کانفیگ کانفینگ رایگان",
+      "timestamp": 1792340161.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002235592095,
+      "name": "Proxy MTProto پروکسی ایرانی",
+      "timestamp": 1792339899.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001255505817,
+      "name": "MTProto Proxy | پروکسی",
+      "timestamp": 1792339451.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": 8520557969,
+      "name": "storebat",
+      "timestamp": 1792339412.0,
+      "is_bot": true,
+      "is_group": false
+    },
+    {
+      "chat_id": -1004490448568,
+      "name": "⚡️ ZEUS PANEL",
+      "timestamp": 1792339309.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001460346255,
+      "name": "APPXA free",
+      "timestamp": 1792337906.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002397303882,
+      "name": "تیگنال | ترید سیگنال",
+      "timestamp": 1792337857.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002778808962,
+      "name": "Proxy Telegram⚡️پروکسی تلگرام",
+      "timestamp": 1792337171.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001906229675,
+      "name": "🖤𝑱𝑲-𝑽𝑷𝑵🃏 کانفیگ رایگان",
+      "timestamp": 1792335627.0,
       "is_bot": false,
       "is_group": true
     }
