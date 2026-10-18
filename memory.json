@@ -161,16 +161,23 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792342027.0,
+      "chat_id": -1004422000937,
+      "name": "💬 ZEUS GAP",
+      "timestamp": 1792342156.0,
       "is_bot": false,
       "is_group": true
     },
     {
-      "chat_id": -1004422000937,
-      "name": "💬 ZEUS GAP",
-      "timestamp": 1792341950.0,
+      "chat_id": -1001648148193,
+      "name": "EzAccess Community | جامعه ایزی اکسس",
+      "timestamp": 1792342147.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792342147.0,
       "is_bot": false,
       "is_group": true
     },
@@ -178,13 +185,6 @@
       "chat_id": -1001836809801,
       "name": "سرور کانفیگ کانفینگ رایگان",
       "timestamp": 1792341910.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1001648148193,
-      "name": "EzAccess Community | جامعه ایزی اکسس",
-      "timestamp": 1792341842.0,
       "is_bot": false,
       "is_group": true
     },
