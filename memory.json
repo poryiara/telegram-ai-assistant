@@ -161,6 +161,20 @@
   ],
   "all_senders": [
     {
+      "chat_id": -1003907392945,
+      "name": "IR NETLIFY GAP",
+      "timestamp": 1792345231.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002235592095,
+      "name": "Proxy MTProto پروکسی ایرانی",
+      "timestamp": 1792345198.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
       "chat_id": -1004493034300,
       "name": "storeBat LIVE update",
       "timestamp": 1792345195.0,
@@ -175,13 +189,6 @@
       "is_group": true
     },
     {
-      "chat_id": -1003907392945,
-      "name": "IR NETLIFY GAP",
-      "timestamp": 1792345188.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
       "chat_id": -1004422000937,
       "name": "💬 ZEUS GAP",
       "timestamp": 1792345010.0,
@@ -192,13 +199,6 @@
       "chat_id": -1001235816045,
       "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
       "timestamp": 1792344927.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1002235592095,
-      "name": "Proxy MTProto پروکسی ایرانی",
-      "timestamp": 1792344847.0,
       "is_bot": false,
       "is_group": true
     },
