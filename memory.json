@@ -8,7 +8,142 @@
     "emergency_contact": "Currently only Saved Messages on Telegram. More methods may be added later.",
     "known_person_sajjad": "Sajjad is a bad person (per Poryia's own words — treat this as a note, not an action)"
   },
+  "owner_notes": [],{
+  "learned_facts": {
+    "full_name": "Poryia Rahmani",
+    "fact_2": "Always introduce yourself as Poryia's AI assistant when talking to others so they know they are talking to an AI and not Poryia",
+    "schedule": "School: Saturday to Wednesday, ~6 AM to ~3 PM. Gym: Saturday, Monday, Wednesday from 21:00 to 22:30 (9-10:30 PM). Other days are variable — could be busy or free, may or may not be working.",
+    "personality_with_others": "Be polite, warm, and humble with everyone. Never show off, never brag about projects, never try to prove himself. Just be a good, respectful person.",
+    "vpn_project": "Poryia manages his VPN project himself. If someone asks about it, just say you'll pass the message along — don't share details.",
+    "emergency_contact": "Currently only Saved Messages on Telegram. More methods may be added later.",
+    "known_person_sajjad": "Sajjad is a bad person (per Poryia's own words — treat this as a note, not an action)"
+  },
   "owner_notes": [],
+  "voice_preferences": {
+    "6657424137": false,
+    "owner": false
+  },
+  "custom_rules": [
+    "با همه بسیار مهربان‌تر صحبت کن و از شکلک‌ها و ایموجی‌های بیشتری استفاده کن"
+  ],
+  "personality_override": "",
+  "dm_senders": [
+    {
+      "chat_id": 6657424137,
+      "name": "Maman♥️",
+      "timestamp": 1792249930.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7972829021,
+      "name": "Soheyl class",
+      "timestamp": 1792228033.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 8584079030,
+      "name": "امیر",
+      "timestamp": 1792227344.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 777000,
+      "name": "Telegram",
+      "timestamp": 1792181124.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7002125861,
+      "name": "Baba♥️",
+      "timestamp": 1792176673.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7370787598,
+      "name": "Dr.Batman",
+      "timestamp": 1792081712.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 8238241181,
+      "name": "Faraji",
+      "timestamp": 1791724269.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 566097766,
+      "name": "Yons m",
+      "timestamp": 1791287045.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 6578367171,
+      "name": "Aizen.D.Luffy",
+      "timestamp": 1790969379.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 6759838545,
+      "name": "Bardia",
+      "timestamp": 1789989849.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 8167888827,
+      "name": "Support",
+      "timestamp": 1788439869.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 6446536474,
+      "name": "Parham Famil",
+      "timestamp": 1784650859.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 7625892004,
+      "name": "𝗦𝘂𝗽𝗽𝗼𝗿𝘁 |JKVPN",
+      "timestamp": 1784322067.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 243495421,
+      "name": "Morteza Dost Sajad",
+      "timestamp": 1784127075.0,
+      "is_bot": false,
+      "is_group": false
+    },
+    {
+      "chat_id": 93413404,
+      "name": "Dayy",
+      "timestamp": 1783548578.0,
+      "is_bot": false,
+      "is_group": false
+    }
+  ],
+  "all_senders": [
+    {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792250955.4785442,
+      "is_bot": false,
+      "is_group": true
+    }
+  ]
+}
   "voice_preferences": {
     "6657424137": false,
     "owner": false
