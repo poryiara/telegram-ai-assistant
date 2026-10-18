@@ -161,16 +161,23 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1001900257871,
-      "name": "SOSkeyNET | سوسکی نت",
-      "timestamp": 1792345348.0,
+      "chat_id": -1001235816045,
+      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
+      "timestamp": 1792345407.0,
       "is_bot": false,
       "is_group": true
     },
     {
-      "chat_id": -1001235816045,
-      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
-      "timestamp": 1792345346.0,
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792345385.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001900257871,
+      "name": "SOSkeyNET | سوسکی نت",
+      "timestamp": 1792345348.0,
       "is_bot": false,
       "is_group": true
     },
@@ -192,13 +199,6 @@
       "chat_id": -1002235592095,
       "name": "Proxy MTProto پروکسی ایرانی",
       "timestamp": 1792345198.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792345195.0,
       "is_bot": false,
       "is_group": true
     },
