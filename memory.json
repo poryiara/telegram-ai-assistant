@@ -157,16 +157,30 @@
       "timestamp": 1781460013.0,
       "is_bot": false,
       "is_group": false
-    },
-    {
-      "chat_id": 120184499,
-      "name": "pouya",
-      "timestamp": 1781408014.0,
-      "is_bot": false,
-      "is_group": false
     }
   ],
   "all_senders": [
+    {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792346311.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001235816045,
+      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
+      "timestamp": 1792346299.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1004422000937,
+      "name": "💬 ZEUS GAP",
+      "timestamp": 1792346279.0,
+      "is_bot": false,
+      "is_group": true
+    },
     {
       "chat_id": 5907543305,
       "name": "QuickPing",
@@ -175,9 +189,9 @@
       "is_group": false
     },
     {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792346160.0,
+      "chat_id": -1001460346255,
+      "name": "APPXA free",
+      "timestamp": 1792346210.0,
       "is_bot": false,
       "is_group": true
     },
@@ -196,23 +210,9 @@
       "is_group": true
     },
     {
-      "chat_id": -1004422000937,
-      "name": "💬 ZEUS GAP",
-      "timestamp": 1792345947.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
       "chat_id": -1002743102065,
       "name": "•Proxy & Config• 2️⃣",
       "timestamp": 1792345947.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1001235816045,
-      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
-      "timestamp": 1792345795.0,
       "is_bot": false,
       "is_group": true
     },
@@ -297,20 +297,6 @@
       "chat_id": -1001255505817,
       "name": "MTProto Proxy | پروکسی",
       "timestamp": 1792339451.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": 8520557969,
-      "name": "storebat",
-      "timestamp": 1792339412.0,
-      "is_bot": true,
-      "is_group": false
-    },
-    {
-      "chat_id": -1004490448568,
-      "name": "⚡️ ZEUS PANEL",
-      "timestamp": 1792339309.0,
       "is_bot": false,
       "is_group": true
     }
