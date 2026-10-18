@@ -161,9 +161,23 @@
   ],
   "all_senders": [
     {
+      "chat_id": -1003782607343,
+      "name": "AmyraxVPN | Chat",
+      "timestamp": 1792344843.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002235592095,
+      "name": "Proxy MTProto پروکسی ایرانی",
+      "timestamp": 1792344841.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
       "chat_id": -1004493034300,
       "name": "storeBat LIVE update",
-      "timestamp": 1792344784.0,
+      "timestamp": 1792344824.0,
       "is_bot": false,
       "is_group": true
     },
@@ -241,20 +255,6 @@
       "chat_id": -1001460346255,
       "name": "APPXA free",
       "timestamp": 1792343124.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1002235592095,
-      "name": "Proxy MTProto پروکسی ایرانی",
-      "timestamp": 1792342707.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1003782607343,
-      "name": "AmyraxVPN | Chat",
-      "timestamp": 1792342581.0,
       "is_bot": false,
       "is_group": true
     },
