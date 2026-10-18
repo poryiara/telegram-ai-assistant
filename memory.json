@@ -161,23 +161,30 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1002743102065,
-      "name": "•Proxy & Config• 2️⃣",
-      "timestamp": 1792342659.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792342659.0,
+      "chat_id": -1002235592095,
+      "name": "Proxy MTProto پروکسی ایرانی",
+      "timestamp": 1792342707.0,
       "is_bot": false,
       "is_group": true
     },
     {
       "chat_id": -1001235816045,
       "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
-      "timestamp": 1792342657.0,
+      "timestamp": 1792342703.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792342699.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002743102065,
+      "name": "•Proxy & Config• 2️⃣",
+      "timestamp": 1792342659.0,
       "is_bot": false,
       "is_group": true
     },
@@ -250,13 +257,6 @@
       "timestamp": 1792340573.0,
       "is_bot": false,
       "is_group": false
-    },
-    {
-      "chat_id": -1002235592095,
-      "name": "Proxy MTProto پروکسی ایرانی",
-      "timestamp": 1792339899.0,
-      "is_bot": false,
-      "is_group": true
     },
     {
       "chat_id": -1001255505817,
