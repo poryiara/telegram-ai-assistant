@@ -161,9 +161,16 @@
   ],
   "all_senders": [
     {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792344934.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
       "chat_id": -1001235816045,
       "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
-      "timestamp": 1792344882.0,
+      "timestamp": 1792344927.0,
       "is_bot": false,
       "is_group": true
     },
@@ -178,13 +185,6 @@
       "chat_id": -1003782607343,
       "name": "AmyraxVPN | Chat",
       "timestamp": 1792344843.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792344824.0,
       "is_bot": false,
       "is_group": true
     },
