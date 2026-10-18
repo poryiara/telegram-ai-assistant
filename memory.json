@@ -161,16 +161,23 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1001188027335,
-      "name": "ExchangeTesla ،پرمیوم ووچر،ارز دیجیتال یوووچر ،هات ووچر",
-      "timestamp": 1792343346.0,
+      "chat_id": -1004422000937,
+      "name": "💬 ZEUS GAP",
+      "timestamp": 1792343403.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1001900257871,
+      "name": "SOSkeyNET | سوسکی نت",
+      "timestamp": 1792343388.0,
       "is_bot": false,
       "is_group": true
     },
     {
       "chat_id": -1001648148193,
       "name": "EzAccess Community | جامعه ایزی اکسس",
-      "timestamp": 1792343335.0,
+      "timestamp": 1792343381.0,
       "is_bot": false,
       "is_group": true
     },
@@ -178,20 +185,6 @@
       "chat_id": -1004493034300,
       "name": "storeBat LIVE update",
       "timestamp": 1792343331.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1004422000937,
-      "name": "💬 ZEUS GAP",
-      "timestamp": 1792343321.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1001900257871,
-      "name": "SOSkeyNET | سوسکی نت",
-      "timestamp": 1792343198.0,
       "is_bot": false,
       "is_group": true
     },
@@ -297,6 +290,13 @@
       "chat_id": -1002397303882,
       "name": "تیگنال | ترید سیگنال",
       "timestamp": 1792337857.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1002778808962,
+      "name": "Proxy Telegram⚡️پروکسی تلگرام",
+      "timestamp": 1792337171.0,
       "is_bot": false,
       "is_group": true
     }
