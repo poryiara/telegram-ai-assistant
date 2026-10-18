@@ -35,7 +35,6 @@ GITHUB_REPO = os.environ.get("GITHUB_REPO", "poryiara/telegram-ai-assistant")
 GITHUB_BRANCH = os.environ.get("GITHUB_BRANCH", "main")
 MEMORY_PATH = os.environ.get("MEMORY_PATH", "memory.json")
 
-# اکانت‌های سیستمی تلگرام که نباید جزو DM حساب شوند
 IGNORED_USER_IDS = {777000, 42777}
 
 runtime_settings = {
@@ -54,10 +53,10 @@ chat_names_cache = {}
 custom_pause_durations = {}
 global_mute_until = 0
 last_bot_send_time = 0
-bot_sending_to_chat = {}  # chat_id -> timestamp (جلوگیری از پاز شدن چت وقتی خود ربات جواب می‌دهد)
+bot_sending_to_chat = {}
 dm_senders = []
 all_senders = []
-bot_last_replies = {}  # chat_id -> {"name": name, "text": reply, "user_text": text, "ts": time}
+bot_last_replies = {}
 recent_actions = deque(maxlen=15)
 recent_logs = deque(maxlen=100)
 started_at = time.time()
@@ -65,7 +64,6 @@ dm_dirty = False
 all_dirty = False
 last_memory_save_ts = 0
 
-# Alert marker — used to skip alerts in on_owner_message
 ALERT_PREFIX = "⚠️ پیام مهم"
 
 def log(message):
@@ -83,20 +81,18 @@ def track_action(action_type, target, extra=""):
 
 ai = genai.Client(api_key=GEMINI_API_KEY)
 
-# لیست مدل‌های واقعی به همراه مدل‌های قبلی به عنوان fallback
 MODELS = [
-    "gemini-2.5-flash",
     "gemini-3-flash-preview",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
     "gemini-3-flash",
+    "gemini-3.1-flash-lite-preview",
     "gemini-3.1-flash-lite",
+    "gemini-2.5-flash-preview-05-20",
 ]
 STT_MODELS = [
-    "gemini-2.5-flash",
     "gemini-3-flash-preview",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
+    "gemini-3-flash",
+    "gemini-3.1-flash-lite-preview",
+    "gemini-3.1-flash-lite",
 ]
 RETRY_DELAYS = [0.5, 1, 2, 3, 5, 8, 13, 20, 30, 30, 30]
 
@@ -224,7 +220,6 @@ def track_sender(chat_id, name, is_bot=False, is_group=False, ts=None):
     if chat_id in IGNORED_USER_IDS or chat_id == OWNER_ID:
         return
     now_ts = ts if ts is not None else time.time()
-    # اگر تایم‌استمپ از آینده بود (باگ ساعت سرور)، با زمان فعلی جایگزینش کن
     if now_ts > time.time() + 60:
         now_ts = time.time()
 
@@ -405,7 +400,6 @@ def build_paused_section():
 def build_dm_senders_section():
     if not dm_senders:
         return "=== DM SENDERS (فقط چت‌های خصوصی افراد واقعی) ===\n❌ خالی. اگه پرسید کی پیام داده، حتماً تگ [POPULATE_DM_SENDERS] رو بذار."
-    # مرتب‌سازی مجدد بر اساس جدیدترین زمان
     sorted_dms = sorted(
         [x for x in dm_senders if x["chat_id"] not in IGNORED_USER_IDS],
         key=lambda x: x.get("timestamp", 0),
@@ -522,7 +516,6 @@ def push_memory(mem):
         return
     url = f"https://api.github.com/repos/{GITHUB_REPO}/contents/{MEMORY_PATH}"
     _, sha = fetch_memory()
-    # همیشه آخرین وضعیت متغیرهای گلوبال dm_senders و all_senders رو ذخیره کن
     to_save = {
         "learned_facts": mem.get("learned_facts", {}),
         "owner_notes": mem.get("owner_notes", []),
@@ -552,7 +545,6 @@ def save_memory_async():
 def save_senders_if_dirty(force=False):
     global dm_dirty, all_dirty, last_memory_save_ts
     now = time.time()
-    # برای جلوگیری از اسپم شدن GitHub API در گروه‌های شلوغ، برای چت‌های عمومی هر ۶۰ ثانیه، ولی برای DM بلافاصله ذخیره کن
     if dm_dirty or (all_dirty and (force or now - last_memory_save_ts > 60)):
         last_memory_save_ts = now
         dm_dirty = False
@@ -562,7 +554,6 @@ def save_senders_if_dirty(force=False):
 memory, _sha = fetch_memory()
 now_init = time.time()
 if memory.get("dm_senders"):
-    # فیلتر کردن اکانت تلگرام و اصلاح تایم‌استمپ‌های اشتباه از آینده
     cleaned_dm = []
     for x in memory["dm_senders"]:
         if x.get("chat_id") in IGNORED_USER_IDS:
@@ -793,7 +784,6 @@ async def ask_gemini(prompt, chat_id=None, with_progress=False, progress_initial
             round_num += 1
             for model_name in MODELS:
                 try:
-                    # استفاده از نسخه Async برای جلوگیری از قفل شدن تلتون
                     result = await ai.aio.models.generate_content(model=model_name, contents=prompt)
                     raw = (result.text or "").strip()
                     if raw:
@@ -940,7 +930,6 @@ async def send_voice_reply(chat_id, reply_to_id, text):
             pass
 
 async def safe_reply(event, text):
-    """ارسال پیام از طرف ربات بدون فعال شدن اشتباهی on_owner_activity یا لوپ پیام‌ها"""
     global last_bot_send_time
     last_bot_send_time = time.time()
     bot_sending_to_chat[event.chat_id] = time.time()
@@ -1091,6 +1080,15 @@ def create_app():
     app.router.add_get("/api/facts", api_facts)
     return app
 
+# ============ Regex Patterns (Safe from copy/paste escaping issues) ============
+RE_CLEAN_POPULATE_DM = re.compile(r"\[(?:POPULATE_DM_SENDERS\vert{}WHO_LAST_DM\vert{}SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]")
+RE_CLEAN_POPULATE_ALL = re.compile(r"\[(?:POPULATE_ALL_SENDERS\vert{}WHO_LAST_ALL\vert{}SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]")
+RE_CLEAN_BASIC = re.compile(r"\[(?:IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]")
+RE_SHOW_MSG = re.compile(r"\[SHOW_MSG:\s*([^\]\|]+)(?:[\|]\s*(\d+))?\]")
+RE_PAUSE = re.compile(r"\[PAUSE:\s*([^\]\|]+)(?:[\|]\s*(\d+))?\]")
+RE_FORWARD_LAST = re.compile(r"\[FORWARD_LAST(?:\s*[\Vert{}]\s*(\d+))?\]")
+RE_FORWARD = re.compile(r"\[FORWARD:\s*([^\]\|]+)(?:[\|]\s*(\d+))?\]")
+
 # ============ Owner handlers ============
 @client.on(events.NewMessage(outgoing=True))
 async def on_owner_activity(event):
@@ -1104,7 +1102,6 @@ async def on_owner_activity(event):
         return
     if getattr(event.message, 'forward', None):
         return
-    # جلوگیری از پاز شدن چت وقتی که خودِ ربات در حال جواب دادن به کاربر است!
     if time.time() - bot_sending_to_chat.get(event.chat_id, 0) < 5.0:
         return
 
@@ -1130,7 +1127,6 @@ async def on_owner_message(event):
 
     text = event.message.text or ""
 
-    # ==== CRITICAL FIX: Skip alert messages (don't re-process them) ====
     if text and ALERT_PREFIX in text:
         log(f"⏭️ Skipping alert message (not processing with AI)")
         return
@@ -1155,7 +1151,7 @@ async def on_owner_message(event):
         await safe_reply(event, "❌ متأسفم، الان نشد. دوباره بفرست 🙏")
         return
 
-    # ===== SHOW_LAST_INCOMING + SHOW_LAST_OUTGOING (handle BOTH) =====
+    # ===== SHOW_LAST_INCOMING + SHOW_LAST_OUTGOING =====
     has_in = "[SHOW_LAST_INCOMING:" in raw
     has_out = "[SHOW_LAST_OUTGOING:" in raw
     if has_in or has_out:
@@ -1208,7 +1204,7 @@ async def on_owner_message(event):
             prompt2 = build_prompt("owner", text + " [لیست DM ها از تلگرام آپدیت شد، حالا دقیق جواب بده]", is_owner=True)
             raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id, with_progress=True)
             if raw2:
-                r = re.sub(r"\[(POPULATE_DM_SENDERS\vert{}WHO_LAST_DM\vert{}SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw2).strip()
+                r = RE_CLEAN_POPULATE_DM.sub("", raw2).strip()
                 if r:
                     histories.setdefault("owner", []).append(f"You: {r}")
                     await safe_reply(event, r)
@@ -1234,7 +1230,7 @@ async def on_owner_message(event):
             prompt2 = build_prompt("owner", text + " [لیست همه چت‌ها از تلگرام آپدیت شد، حالا دقیق جواب بده]", is_owner=True)
             raw2, _ = await ask_gemini(prompt2, chat_id=event.chat_id, with_progress=True)
             if raw2:
-                r = re.sub(r"\[(POPULATE_ALL_SENDERS\vert{}WHO_LAST_ALL\vert{}SHOW_LAST_INCOMING:[^\]]+|SHOW_LAST_OUTGOING:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw2).strip()
+                r = RE_CLEAN_POPULATE_ALL.sub("", raw2).strip()
                 if r:
                     histories.setdefault("owner", []).append(f"You: {r}")
                     await safe_reply(event, r)
@@ -1259,7 +1255,7 @@ async def on_owner_message(event):
         if not dm_senders:
             await safe_reply(event, "❓ DM پیدا نشد")
             return
-        r = re.sub(r"\[(WHO_LAST_DM\vert{}IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", raw.replace("[WHO_LAST_DM]", "")).strip()
         if r:
             histories.setdefault("owner", []).append(f"You: {r}")
             await safe_reply(event, r)
@@ -1282,7 +1278,7 @@ async def on_owner_message(event):
         if not all_senders:
             await safe_reply(event, "❓ پیام پیدا نشد")
             return
-        r = re.sub(r"\[(WHO_LAST_ALL\vert{}IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", raw.replace("[WHO_LAST_ALL]", "")).strip()
         if r:
             histories.setdefault("owner", []).append(f"You: {r}")
             await safe_reply(event, r)
@@ -1294,7 +1290,7 @@ async def on_owner_message(event):
         return
 
     # ===== SHOW_MSG =====
-    m = re.search(r"\[SHOW_MSG:\s*([^\vert{}\]]+)(?:\|\s*(\d+))?\]", raw)
+    m = RE_SHOW_MSG.search(raw)
     if m:
         target = m.group(1).strip()
         count = min(int(m.group(2)) if m.group(2) else 5, 20)
@@ -1318,7 +1314,7 @@ async def on_owner_message(event):
         owner_last_seen.clear()
         custom_pause_durations.clear()
         track_action("UNPAUSE_ALL", c)
-        r = re.sub(r"\[(UNPAUSE_ALL\vert{}IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", raw.replace("[UNPAUSE_ALL]", "")).strip()
         if not r:
             r = f"✅ همه {c} چت آزاد شدن"
         await safe_reply(event, r)
@@ -1337,7 +1333,7 @@ async def on_owner_message(event):
             del owner_last_seen[cid]
             custom_pause_durations.pop(cid, None)
             track_action("UNPAUSE", cid, name)
-            r = re.sub(r"\[(UNPAUSE:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[UNPAUSE:[^\]]+\]", "", raw)).strip()
             if not r:
                 r = f"✅ «{name}» آزاد شد"
         else:
@@ -1355,7 +1351,7 @@ async def on_owner_message(event):
             custom_pause_durations[cid] = 10 * 365 * 24 * 3600
             name = await cache_chat_name(cid, force=True)
             track_action("PAUSE_FOREVER", cid, name)
-            r = re.sub(r"\[(PAUSE_FOREVER:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[PAUSE_FOREVER:[^\]]+\]", "", raw)).strip()
             if not r:
                 r = f"🛑 «{name}» دائمی"
             await safe_reply(event, r)
@@ -1364,7 +1360,7 @@ async def on_owner_message(event):
         return
 
     # ===== PAUSE =====
-    m = re.search(r"\[PAUSE:\s*([^\vert{}\]]+)(?:\|\s*(\d+))?\]", raw)
+    m = RE_PAUSE.search(raw)
     if m:
         target = m.group(1).strip()
         mins = int(m.group(2)) if m.group(2) else (runtime_settings["pause_duration"] // 60)
@@ -1374,7 +1370,7 @@ async def on_owner_message(event):
             custom_pause_durations[cid] = mins * 60
             name = await cache_chat_name(cid, force=True)
             track_action("PAUSE", cid, f"{name} {mins}m")
-            r = re.sub(r"\[(PAUSE:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[PAUSE:[^\]]+\]", "", raw)).strip()
             if not r:
                 r = f"🛑 «{name}» {mins}د"
             await safe_reply(event, r)
@@ -1383,7 +1379,7 @@ async def on_owner_message(event):
         return
 
     # ===== FORWARD_LAST =====
-    m = re.search(r"\[FORWARD_LAST(?:\s*\Vert{}\s*(\d+))?\]", raw)
+    m = RE_FORWARD_LAST.search(raw)
     if m:
         count = min(int(m.group(1)) if m.group(1) else 1, 20)
         if not dm_senders:
@@ -1408,14 +1404,14 @@ async def on_owner_message(event):
             await safe_reply(event, f"❌ {err}")
         else:
             track_action("FORWARD_LAST", last["chat_id"], last["name"])
-            r = re.sub(r"\[(FORWARD_LAST[^\]]*|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[FORWARD_LAST[^\]]*\]", "", raw)).strip()
             if not r:
                 r = f"📨 {fwd} پیام از «{last['name']}» فوروارد شد"
             await safe_reply(event, r)
         return
 
     # ===== FORWARD =====
-    m = re.search(r"\[FORWARD:\s*([^\vert{}\]]+)(?:\|\s*(\d+))?\]", raw)
+    m = RE_FORWARD.search(raw)
     if m:
         target = m.group(1).strip()
         count = min(int(m.group(2)) if m.group(2) else 1, 20)
@@ -1432,7 +1428,7 @@ async def on_owner_message(event):
                 await safe_reply(event, f"❌ {err}")
             else:
                 track_action("FORWARD", cid, f"{name} {fwd}")
-                r = re.sub(r"\[(FORWARD:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+                r = RE_CLEAN_BASIC.sub("", re.sub(r"\[FORWARD:[^\]]+\]", "", raw)).strip()
                 if not r:
                     r = f"📨 {fwd} پیام از «{name}» فوروارد شد"
                 await safe_reply(event, r)
@@ -1464,7 +1460,7 @@ async def on_owner_message(event):
         mins = int(m.group(1))
         global_mute_until = time.time() + mins * 60
         track_action("GLOBAL_MUTE", f"{mins}m")
-        r = re.sub(r"\[(GLOBAL_MUTE:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", re.sub(r"\[GLOBAL_MUTE:[^\]]+\]", "", raw)).strip()
         if not r:
             r = f"🔇 {mins} دقیقه ساکت شدم"
         await safe_reply(event, r)
@@ -1473,7 +1469,7 @@ async def on_owner_message(event):
     # ===== GLOBAL_UNMUTE =====
     if "[GLOBAL_UNMUTE]" in raw:
         global_mute_until = 0
-        r = re.sub(r"\[(GLOBAL_UNMUTE\vert{}IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", raw.replace("[GLOBAL_UNMUTE]", "")).strip()
         if not r:
             r = "🔊 آنمیوت شدم"
         await safe_reply(event, r)
@@ -1488,7 +1484,7 @@ async def on_owner_message(event):
             memory["custom_rules"].append(rule)
             save_memory_async()
             track_action("RULE_ADD", rule[:40])
-        r = re.sub(r"\[(RULE_ADD:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", re.sub(r"\[RULE_ADD:[^\]]+\]", "", raw)).strip()
         if not r:
             r = f"✅ قانون #{len(memory['custom_rules'])}\n📏 {rule}"
         await safe_reply(event, r)
@@ -1501,7 +1497,7 @@ async def on_owner_message(event):
         if 0 <= idx < len(rules):
             removed = rules.pop(idx)
             save_memory_async()
-            r = re.sub(r"\[(RULE_REMOVE:\d+\vert{}IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+            r = RE_CLEAN_BASIC.sub("", re.sub(r"\[RULE_REMOVE:\d+\]", "", raw)).strip()
             if not r:
                 r = f"🗑️ {removed}"
             await safe_reply(event, r)
@@ -1521,7 +1517,7 @@ async def on_owner_message(event):
         c = len(memory.get("custom_rules", []))
         memory["custom_rules"] = []
         save_memory_async()
-        r = re.sub(r"\[(RULE_CLEAR\vert{}IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", raw.replace("[RULE_CLEAR]", "")).strip()
         if not r:
             r = f"🧹 {c} قانون پاک شد"
         await safe_reply(event, r)
@@ -1532,7 +1528,7 @@ async def on_owner_message(event):
         p = m.group(1).strip()
         memory["personality_override"] = p
         save_memory_async()
-        r = re.sub(r"\[(PERSONALITY_SET:[^\]]+|IMPORTANT|NORMAL|ENABLE_VOICE|DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", re.sub(r"\[PERSONALITY_SET:[^\]]+\]", "", raw)).strip()
         if not r:
             r = f"🎭 شخصیت تغییر کرد:\n{p}"
         await safe_reply(event, r)
@@ -1541,7 +1537,7 @@ async def on_owner_message(event):
     if "[PERSONALITY_CLEAR]" in raw:
         memory["personality_override"] = ""
         save_memory_async()
-        r = re.sub(r"\[(PERSONALITY_CLEAR\vert{}IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+        r = RE_CLEAN_BASIC.sub("", raw.replace("[PERSONALITY_CLEAR]", "")).strip()
         if not r:
             r = "🎭 پیش‌فرض"
         await safe_reply(event, r)
@@ -1604,7 +1600,7 @@ async def on_owner_message(event):
     elif disable_voice:
         set_voice_pref("owner", False)
 
-    reply = re.sub(r"\[(IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+    reply = RE_CLEAN_BASIC.sub("", raw).strip()
     if not reply:
         return
 
@@ -1631,7 +1627,7 @@ async def on_incoming(event):
         is_bot = getattr(sender, "bot", False)
         sname = getattr(sender, "first_name", "") or getattr(sender, "username", "") or str(sender.id)
         track_sender(sender.id, sname, is_bot=is_bot, is_group=False, ts=msg_ts)
-        save_senders_if_dirty()  # ذخیره فوری پیام‌دهنده جدید در حافظه!
+        save_senders_if_dirty()
         if is_bot:
             return
     else:
@@ -1667,12 +1663,10 @@ async def on_incoming(event):
     if raw is None:
         return
 
-    # ==== Detect importance with multiple fallbacks ====
     important = "[IMPORTANT]" in raw
     enable_voice = "[ENABLE_VOICE]" in raw
     disable_voice = "[DISABLE_VOICE]" in raw
 
-    # Fallback: if no tag at all but has urgent keywords, treat as important
     if not important and "[NORMAL]" not in raw:
         urgent_kw = ["فوری", "اورژانس", "زنگ بزن", "مهم", "ضروری", "خودت بیا", "خودت جواب", "تماس بگیر"]
         if any(kw in text for kw in urgent_kw):
@@ -1684,9 +1678,8 @@ async def on_incoming(event):
     elif disable_voice:
         set_voice_pref(user_key, False)
 
-    reply = re.sub(r"\[(IMPORTANT\vert{}NORMAL\vert{}ENABLE_VOICE\vert{}DISABLE_VOICE)\]", "", raw).strip()
+    reply = RE_CLEAN_BASIC.sub("", raw).strip()
 
-    # ==== CRITICAL FIX: Send alert FIRST, before any early returns ====
     if important:
         try:
             sender_name = getattr(sender, "first_name", "") or getattr(sender, "username", "") or str(sender.id)
@@ -1700,7 +1693,6 @@ async def on_incoming(event):
             await client.send_message("me", alert_text, silent=True)
             log(f"📩 Silent alert sent to Saved Messages")
             
-            # Schedule ntfy alert AFTER delay (don't block main flow)
             async def delayed_ntfy():
                 await asyncio.sleep(runtime_settings["alert_delay"])
                 await send_alert(alert_text)
@@ -1709,7 +1701,6 @@ async def on_incoming(event):
         except Exception as e:
             log(f"⚠️ Alert error: {str(e)[:150]}")
 
-    # ==== Now send reply (can be empty after alert) ====
     if not reply:
         return
 
@@ -1741,7 +1732,6 @@ async def main():
     me = await client.get_me()
     log(f"✅ {me.first_name} (id={me.id})")
     await start_api()
-    # همگام‌سازی اولیه با تلگرام در لحظه روشن شدن برای اطمینان از دقیق بودن لیست آخرین پیام‌ها
     log("🔄 Syncing recent senders from Telegram on startup...")
     await populate_senders_from_telegram(limit=20, include_all=True)
     save_senders_if_dirty(force=True)
