@@ -224,13 +224,6 @@
       "is_group": true
     },
     {
-      "chat_id": -1001255505817,
-      "name": "MTProto Proxy | پروکسی",
-      "timestamp": 1792343941.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
       "chat_id": -1002021302234,
       "name": "کانفیگ پلاس | گیگی 3ت آنی💥",
       "timestamp": 1792343702.0,
@@ -285,6 +278,13 @@
       "timestamp": 1792340573.0,
       "is_bot": false,
       "is_group": false
+    },
+    {
+      "chat_id": -1001255505817,
+      "name": "MTProto Proxy | پروکسی",
+      "timestamp": 1792339451.0,
+      "is_bot": false,
+      "is_group": true
     },
     {
       "chat_id": 8520557969,
