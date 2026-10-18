@@ -161,16 +161,23 @@
   ],
   "all_senders": [
     {
-      "chat_id": -1003782607343,
-      "name": "AmyraxVPN | Chat",
-      "timestamp": 1792344843.0,
+      "chat_id": -1001235816045,
+      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
+      "timestamp": 1792344882.0,
       "is_bot": false,
       "is_group": true
     },
     {
       "chat_id": -1002235592095,
       "name": "Proxy MTProto پروکسی ایرانی",
-      "timestamp": 1792344841.0,
+      "timestamp": 1792344847.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
+      "chat_id": -1003782607343,
+      "name": "AmyraxVPN | Chat",
+      "timestamp": 1792344843.0,
       "is_bot": false,
       "is_group": true
     },
@@ -206,13 +213,6 @@
       "chat_id": -1001648148193,
       "name": "EzAccess Community | جامعه ایزی اکسس",
       "timestamp": 1792344529.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1001235816045,
-      "name": "𝘾𝙤𝙣𝙛𝙞𝙜𝙨𝙃𝙪𝙗",
-      "timestamp": 1792344518.0,
       "is_bot": false,
       "is_group": true
     },
