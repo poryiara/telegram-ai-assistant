@@ -161,9 +161,16 @@
   ],
   "all_senders": [
     {
+      "chat_id": -1004493034300,
+      "name": "storeBat LIVE update",
+      "timestamp": 1792341976.0,
+      "is_bot": false,
+      "is_group": true
+    },
+    {
       "chat_id": -1004422000937,
       "name": "💬 ZEUS GAP",
-      "timestamp": 1792341918.0,
+      "timestamp": 1792341950.0,
       "is_bot": false,
       "is_group": true
     },
@@ -171,13 +178,6 @@
       "chat_id": -1001836809801,
       "name": "سرور کانفیگ کانفینگ رایگان",
       "timestamp": 1792341910.0,
-      "is_bot": false,
-      "is_group": true
-    },
-    {
-      "chat_id": -1004493034300,
-      "name": "storeBat LIVE update",
-      "timestamp": 1792341896.0,
       "is_bot": false,
       "is_group": true
     },
